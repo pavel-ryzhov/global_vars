@@ -47,7 +47,7 @@ int main(int argc, const char **argv) {
     auto &options_parser = expected_parser.get();
     auto &compilations = options_parser.getCompilations();
     const auto &source_paths = options_parser.getSourcePathList();
-    std::ofstream ofs{"output_sorted.txt"};
+    std::ofstream ofs{"output_without_constexpr.txt"};
 
     clang::tooling::ClangTool tool(compilations, source_paths);
 
@@ -58,7 +58,6 @@ int main(int argc, const char **argv) {
         clang::ast_matchers::hasGlobalStorage(),
         clang::ast_matchers::unless(clang::ast_matchers::parmVarDecl()),
         clang::ast_matchers::unless(clang::ast_matchers::isStaticLocal()),
-        clang::ast_matchers::unless(clang::ast_matchers::isConstexpr()),
         clang::ast_matchers::unless(clang::ast_matchers::hasType(clang::ast_matchers::isConstQualified()))
     ).bind("globalVar");
 
