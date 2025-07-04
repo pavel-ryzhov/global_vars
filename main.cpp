@@ -47,18 +47,15 @@ int main(int argc, const char **argv) {
     auto &options_parser = expected_parser.get();
     auto &compilations = options_parser.getCompilations();
     const auto &source_paths = options_parser.getSourcePathList();
-    std::ofstream ofs{"output_without_constexpr.txt"};
+    std::ofstream ofs{"output_1.txt"};
 
     clang::tooling::ClangTool tool(compilations, source_paths);
 
     GlobalVarPrinter printer;
 
     clang::ast_matchers::DeclarationMatcher global_var_matcher = clang::ast_matchers::varDecl(
-        clang::ast_matchers::isExpansionInMainFile(),
         clang::ast_matchers::hasGlobalStorage(),
-        clang::ast_matchers::unless(clang::ast_matchers::parmVarDecl()),
-        clang::ast_matchers::unless(clang::ast_matchers::isStaticLocal()),
-        clang::ast_matchers::unless(clang::ast_matchers::hasType(clang::ast_matchers::isConstQualified()))
+        clang::ast_matchers::unless(clang::ast_matchers::parmVarDecl())
     ).bind("globalVar");
 
     clang::ast_matchers::MatchFinder finder;
