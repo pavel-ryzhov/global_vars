@@ -1,0 +1,270 @@
+#include <iostream>
+#include <list>
+#include <string>
+#include <stdio.h>
+
+using namespace std;
+
+class Entity //Запись
+{
+public:
+	string word;
+	int rank;
+	Entity(string nword, int nrank) : word(nword), rank(nrank)
+	{};
+		
+};
+class EntityGroup : public list<Entity> //Группа записей с одинаковым кодом
+{
+public:
+	void add(const string& word, const int& rank);
+	void updateRank(iterator& record);
+	iterator findEntity(const int& rank);
+};
+class Node : public EntityGroup //Дерево поиска
+{
+private:
+	void realDescentIterative(string::const_iterator& codeCurr, const string::const_iterator& codeLast, const string& word, const int& rank);
+	Node* realFindEntityGroupIterative(string::const_iterator& codeCurr, const string::const_iterator& codeLast);
+	static list<Node>::iterator iter; //создан для ускорения работы поиска. Быстрее, т.к. не создается для каждого объекта
+public:
+	Node* children[8];
+	Node* findEntityGroup(const string& code);
+	void descent(const string& code, const string& word, const int& rank);
+	Node() {for (int i = 0; i <= 7; i++) children[i] = NULL; };
+};
+list<Node>::iterator Node::iter;
+
+Node dictionary;
+
+
+string encode(string);
+string decode(string);
+char nextSymbol(const char&);
+////////////////////////
+int main(int argc, char** argv)
+{
+	int wordCount;
+	cin >> wordCount;
+	cerr << "word count: " << wordCount << endl;
+	string word; int rank;
+	for (int i = 1; i <= wordCount; i++) //Заполнение словаря словами
+	{
+		cin >> word >> rank;
+		if (wordCount == 50000 && i < 100)
+			cerr << word << " " << rank;
+		dictionary.descent(encode(word), word, rank);
+	}
+	cerr << "analysis starts." << endl << flush;
+	string code;
+	cin >> code;
+	while (true) //Cчитываем последовательность кодов
+	{
+		cout << decode(code);
+		while (cin.peek() == ' ')
+		{
+			cin.ignore(1);
+			cout << ' ';
+		}
+		if (!(cin >> code))
+			break;
+	}
+	cout << endl;
+	return 0;
+}
+
+////////////////////////
+string encode(string word) //Внимание! p на цифре 7
+{
+	for (string::iterator i (word.begin()); i < word.end(); i++)
+	{
+		switch (*i)
+		{
+		case 'a': case 'b': case 'c':
+			*i = '2';
+			break;
+		case 'd': case 'e': case 'f':
+			*i = '3';
+			break;
+		case 'g': case 'h': case 'i':
+			*i = '4';
+			break;
+		case 'j': case 'k': case 'l':
+			*i = '5';
+			break;
+		case 'm': case 'n': case 'o':
+			*i = '6';
+			break;
+		case 'p': case 'q': case 'r': case 's':
+			*i = '7';
+			break;
+		case 't': case 'u': case 'v':
+			*i = '8';
+			break;
+		case 'w': case 'x': case 'y': case 'z':
+			*i = '9';
+			break;
+		default:
+			break;
+		}
+	}
+	return word;
+}
+////////////////////////
+string decode(string input)
+{
+	int wordLength = input.length(); //длина слова без управляющих символов "*" и знаков препинания
+	string code, symbols; //слово и символы
+	int find1, find2; //первое появление "1" и "*"
+	find1 = input.find('1');
+	find2 = input.find('*');
+	if (find1 != string::npos)
+		wordLength = find1;
+	if (find2 != string::npos)
+	{
+		if (find1 == string::npos)
+			wordLength = find2;
+		else
+			wordLength = (find1 < find2) ? find1 : find2;
+	}
+	symbols = input.substr(wordLength, string::npos);
+	code = input.substr(0, wordLength);
+	//подсчитываем, какое по счёту слово из словаря нам нужно и какой поставить знак препинания
+	bool brank = true; //флаг указывает, что именно мы ищем в последовательности управляющих символов
+	int onesCount = 0;
+	int rank = 1;
+	char symbol = 's';
+	string addition;
+	for (string::iterator i = symbols.begin(); i != symbols.end(); i++)
+	{
+		if ((*i != '1') && brank)
+			rank++;
+		else
+		{
+			if (*i == '1')
+				onesCount++;
+			if (onesCount > 1 || (*i != '1' && *i != '*'))
+			{
+				addition = decode(string(i,symbols.end()));
+				break;
+			}
+			brank = false;
+			symbol = nextSymbol(symbol);
+		};
+	}
+	//Ищем слово в словаре
+	if (code != "")
+	{
+		Node* group = dictionary.findEntityGroup(code);
+		EntityGroup::iterator bestWord = group->findEntity(rank);
+		group->updateRank(bestWord); //повышаем частоту употребления слова
+		
+		if (symbol != 's')
+			return bestWord->word + symbol + addition;
+		else
+			return bestWord->word + addition;
+	}
+	else
+	{
+		string res(1,symbol);
+		return res + addition;
+	}
+}
+////////////////////////
+char nextSymbol(const char& symbol)
+{
+	switch(symbol)
+	{
+		case 's':
+			return '.'; //Опция введена для быстродействия
+		case '.':
+			return ',';
+		case ',':
+			return '?';
+		default:
+			return '.';
+	}
+}
+////////////////////////
+void EntityGroup::add(const string& word, const int& rank)
+{
+	//word не проверяется, т.к. во входном потоке слова расположены по алфавиту
+	reverse_iterator i = this->rbegin();
+	while (i != this->rend() && i->rank < rank)
+		i++;
+	this->insert(i.base(), Entity(word, rank));
+	
+}
+////////////////////////
+void EntityGroup::updateRank(EntityGroup::iterator& record)
+{
+	int tmp;
+	record->rank++;
+	EntityGroup::reverse_iterator prev(record);	
+	while (prev != this->rend() && prev->rank <= record->rank)
+	{
+		//Обмен записей значениями
+		tmp = record->rank;
+		record->rank = prev->rank;
+		prev->rank = tmp;
+		std::swap(record->word, prev->word);
+		record--;
+		prev++;
+	}
+	return;
+}
+////////////////////////
+EntityGroup::iterator EntityGroup::findEntity(const int& rank)
+{
+	iterator result = this->begin();
+	for (int j = 1; j < rank; j++) //Если нужно не "лучшее" слово
+		result++;
+	return result;
+}
+////////////////////////
+void Node::descent(const string& code, const string& word, const int& rank)
+{
+	static string::const_iterator coit;
+	coit = code.begin();
+	static string::const_iterator coend;
+	coend = code.end();
+	realDescentIterative(coit, coend, word, rank);
+}
+////////////////////////
+Node* Node::findEntityGroup(const string& code)
+{
+	static string::const_iterator coit;
+	coit = code.begin();
+	static string::const_iterator coend;
+	coend = code.end();
+	return realFindEntityGroupIterative(coit, coend);
+}
+////////////////////////
+void Node::realDescentIterative(string::const_iterator& codeCurr, const string::const_iterator& codeLast, const string& word, const int& rank)
+{
+	Node* currNode = this;
+	char index;
+	for (; codeCurr != codeLast; codeCurr++)
+	{
+		index = *codeCurr - '2';
+		if (currNode->children[index] != NULL) //Найдено
+			currNode = currNode->children[index];
+		else
+		{
+			currNode->children[index] = new Node;
+			currNode = currNode->children[index];
+		}
+	}
+	currNode->add(word, rank);
+}
+////////////////////////
+Node* Node::realFindEntityGroupIterative(string::const_iterator& codeCurr, const string::const_iterator& codeLast)
+{
+	Node* currNode = this;
+	for (; codeCurr != codeLast; codeCurr++)
+	{
+		currNode = currNode->children[*codeCurr - '2'];
+	}
+	return currNode;
+}
+////////////////////////

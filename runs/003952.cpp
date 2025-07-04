@@ -1,0 +1,985 @@
+#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <iterator>
+#include <math.h>
+#include <functional>
+
+using std::vector;
+using std::string;
+using std::sort;
+using std::min;
+using std::max;
+using std::max_element;
+using std::copy;
+using std::remove_if;
+using std::bind2nd;
+using std::less;
+using std::cin;
+using std::cout;
+using std::endl;
+using std::cerr;
+
+// Simple algorithm. Hypotheses:
+// 1. We have 3 digits
+// 
+// Plan:
+// 1. Split picture into 3 parts
+// 2. Get digit rectangle and size in pixels
+// 3. Try to draw good digit and calculate conditional probability
+
+int GetIntFromChar(char symbol) {
+  switch (symbol) {
+    case '.':
+      return 0;
+    case '%':
+      return 1;
+    case '#':
+      return 2;
+    case '@':
+      return 3;
+  }
+}
+
+char GetCharFromInt(int symbol) {
+  switch (symbol) {
+    case 0:
+      return '.';
+    case 1:
+      return '%';
+    case 2:
+      return '#';
+    case 3:
+      return '@';
+  }
+}
+
+int NearNumber(double number) {
+  return static_cast<int>(floor(number + 0.5));
+}
+
+class Image {
+ private:
+  struct Borders {
+    int string_up_;
+    int string_down_;
+    int column_left_;
+    int column_right_;
+
+    Borders(int string_up, int column_left, int string_down, int column_right)
+        : string_up_(string_up)
+        , column_left_(column_left)
+        , string_down_(string_down)
+        , column_right_(column_right)
+        {
+    }
+  };
+
+ private:
+  int width_;
+  int height_;
+  vector<vector<int> > pixels_;
+  vector<Borders> digits_;
+
+  void _Show(const Borders &borders) const {
+    for (int string_id = borders.string_up_; string_id < borders.string_down_; ++string_id) {
+      for (int column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        cerr << GetCharFromInt(pixels_[string_id][column_id]);
+      }
+      cerr << endl;
+    }
+  }
+
+  void _FixBorders(Borders &borders) {
+    int left_border = borders.column_right_;
+    int right_border = borders.column_left_;
+    for (int string_id = borders.string_up_; string_id < borders.string_down_; ++string_id) {
+      for (int column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        if (column_id < left_border && pixels_[string_id][column_id] != 0) {
+          left_border = column_id;
+        }
+        if (column_id + 1 > right_border && pixels_[string_id][column_id] != 0) {
+          right_border = column_id + 1;
+        }
+      }
+    }
+    borders.column_left_ = left_border;
+    borders.column_right_ = right_border;
+
+    bool is_empty_string = true;
+    while (is_empty_string) {
+      for (int column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        if (pixels_[borders.string_up_][column_id] != 0) {
+          is_empty_string = false;
+          break;
+        }
+      }
+      if (is_empty_string) {
+        borders.string_up_++;
+      }
+    }
+
+    is_empty_string = true;
+    while (is_empty_string) {
+      for (int column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        if (pixels_[borders.string_down_ - 1][column_id] != 0) {
+          is_empty_string = false;
+          break;
+        }
+      }
+      if (is_empty_string) {
+        borders.string_down_--;
+      }
+    }
+  }
+
+  // @return bool - found pixel to mark
+  bool FindNotMarkedPixel(const Borders &borders, int &string_id, int &column_id) {
+    for (string_id = borders.string_up_; string_id < borders.string_down_; ++string_id) {
+      for (column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        if (pixels_[string_id][column_id] > 0 && pixels_[string_id][column_id] < 4) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  bool IsNotMarked(int string_id, int column_id) {
+    if (pixels_[string_id][column_id] > 0 
+        && pixels_[string_id][column_id] < 4) {
+      return true;
+    }
+    return false;
+  }
+
+  void MarkFigure(const Borders &borders
+      , int additional
+      , int string_id
+      , int column_id
+      , int &figure_weight
+      ) {
+    figure_weight += pixels_[string_id][column_id];
+    pixels_[string_id][column_id] += additional;
+    // go left
+    if (column_id > borders.column_left_ && IsNotMarked(string_id, column_id - 1)) {
+      MarkFigure(borders, additional, string_id, column_id - 1, figure_weight);
+    }
+    // go right
+    if (column_id + 1 < borders.column_right_ && IsNotMarked(string_id, column_id + 1)) {
+      MarkFigure(borders, additional, string_id, column_id + 1, figure_weight);
+    }
+    // go up
+    if (string_id > borders.string_up_ && IsNotMarked(string_id - 1, column_id)) {
+      MarkFigure(borders, additional, string_id - 1, column_id, figure_weight);
+    }
+    // go down
+    if (string_id + 1 < borders.string_down_ && IsNotMarked(string_id + 1, column_id)) {
+      MarkFigure(borders, additional, string_id + 1, column_id, figure_weight);
+    }
+    // go left-up
+    if (column_id > borders.column_left_ 
+        && string_id > borders.string_up_
+        && IsNotMarked(string_id - 1, column_id - 1)) {
+      MarkFigure(borders, additional, string_id - 1, column_id - 1, figure_weight);
+    }
+    // go left-down
+    if (column_id > borders.column_left_ 
+        && string_id + 1 < borders.string_down_
+        && IsNotMarked(string_id + 1, column_id - 1)) {
+      MarkFigure(borders, additional, string_id + 1, column_id - 1, figure_weight);
+    }
+    // go right-up
+    if (column_id + 1 < borders.column_right_
+        && string_id > borders.string_up_
+        && IsNotMarked(string_id - 1, column_id + 1)) {
+      MarkFigure(borders, additional, string_id - 1, column_id + 1, figure_weight);
+    }
+    // go right-down
+    if (column_id + 1 < borders.column_right_
+        && string_id + 1 < borders.string_down_
+        && IsNotMarked(string_id + 1, column_id + 1)) {
+      MarkFigure(borders, additional, string_id + 1, column_id + 1, figure_weight);
+    }
+  }
+
+  void CleanByAdditional(const Borders &borders, int good_additional, bool safe_clean = true) {
+    for (int string_id = borders.string_up_; string_id < borders.string_down_; ++string_id) {
+      for (int column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        if (pixels_[string_id][column_id] > good_additional 
+            && pixels_[string_id][column_id] < good_additional + 4
+            ) {
+          pixels_[string_id][column_id] %= 4;
+        } else {
+          if (safe_clean) {
+            pixels_[string_id][column_id] %= 4;
+          } else {
+            pixels_[string_id][column_id] = 0;
+          }
+        }
+      }
+    }
+  }
+
+  bool IsBordered(const Borders &borders, int additional, int string_id, int column_id) {
+    if (string_id < borders.string_up_ 
+        || string_id == borders.string_down_
+        || column_id < borders.column_left_
+        || column_id == borders.column_right_
+        ) {
+      return false;
+    }
+    if (pixels_[string_id][column_id] == 0) {
+      pixels_[string_id][column_id] = additional;
+      return IsBordered(borders, additional, string_id - 1, column_id - 1)
+          && IsBordered(borders, additional, string_id - 1, column_id)
+          && IsBordered(borders, additional, string_id - 1, column_id + 1)
+          && IsBordered(borders, additional, string_id, column_id - 1)
+          && IsBordered(borders, additional, string_id, column_id + 1)
+          && IsBordered(borders, additional, string_id + 1, column_id - 1)
+          && IsBordered(borders, additional, string_id + 1, column_id)
+          && IsBordered(borders, additional, string_id + 1, column_id + 1);
+    }
+    return true;
+  }
+
+  bool CheckInternalPixel(const Borders &borders
+      , int additional
+      , int string_id
+      , int column_id
+      ) {
+    bool is_internal = false;
+    // check up
+    int string_up_index = string_id;
+    for (
+        ; string_up_index >= borders.string_up_
+        ; --string_up_index
+        ) {
+      if (pixels_[string_up_index][column_id] > additional 
+            && pixels_[string_up_index][column_id] < additional + 4
+            ) {
+          is_internal = true;
+          break;
+      }
+    }
+    if (!is_internal) {
+      return false;
+    }
+    return IsBordered(borders, additional, string_up_index + 1, column_id);
+  }
+  
+  // @return figures with weights
+  vector<int> _MarkFigures(const Borders &borders, int &good_additional) {
+    vector<int> figure_weights;
+
+    bool exists_not_marked = true;
+    for (int additional = 4; exists_not_marked == true; additional += 4) {
+      int string_id = 0;
+      int column_id = 0;
+      int figure_weight = 0;
+
+      exists_not_marked = FindNotMarkedPixel(borders, string_id, column_id);
+      if (exists_not_marked) {
+        bool is_internal_figure = false;
+        int index_outer_figure = 0;
+        for (
+            ; index_outer_figure < figure_weights.size() && !is_internal_figure
+            ; ++index_outer_figure
+            ) {
+          is_internal_figure = CheckInternalPixel(borders
+              , (index_outer_figure + 1) * 4
+              , string_id
+              , column_id
+              );
+        }
+        if (is_internal_figure) {
+          figure_weight = figure_weights[index_outer_figure - 1];
+        }
+        MarkFigure(borders, additional, string_id, column_id, figure_weight);
+        figure_weights.push_back(figure_weight);
+      }
+    }
+
+    int max_weight_index = 0;
+    for (int index = 1; index < figure_weights.size(); ++index) {
+      if (figure_weights[index] > figure_weights[max_weight_index]) {
+        max_weight_index = index;
+      }
+    }
+
+    good_additional = (max_weight_index + 1) * 4;
+    return figure_weights;
+  }
+
+  void _CleanFigures(const Borders &borders) {
+    int good_additional = 0;
+    _MarkFigures(borders, good_additional);
+    CleanByAdditional(borders, good_additional, false);
+  }
+
+  int GetMiddleValue(const Borders &borders) const {
+    int count_elements = 0;
+    int result_sum = 0;
+    for (int string_id = borders.string_up_; string_id < borders.string_down_; ++string_id) {
+      for (int column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        count_elements++;
+        result_sum += pixels_[string_id][column_id];
+      }
+    }
+    return count_elements > 0 ? result_sum / count_elements : 0;
+  }
+
+  void _CreateMiddleFigures(Borders &borders) {
+    const int kResultSize = 10;
+    vector<vector<int> > result_image;
+    result_image.resize(kResultSize);
+
+    int string_shift = (borders.string_down_ - borders.string_up_ + kResultSize - 1) / kResultSize;
+    double string_precision_shift = (static_cast<double>(borders.string_down_) - borders.string_up_) / kResultSize;
+    int column_shift = (borders.column_right_ - borders.column_left_ + kResultSize - 1) / kResultSize;
+    double column_precision_shift = (static_cast<double>(borders.column_right_) - borders.column_left_) / kResultSize;
+    for (int line_index = 0
+        ; line_index < kResultSize
+        ; ++line_index
+        ) {
+
+      for (int column_index = 0
+          ; column_index < kResultSize
+          ; ++column_index
+          ) {
+        int current_string_up = NearNumber(string_precision_shift * line_index + borders.string_up_);
+        int current_column_left = NearNumber(column_precision_shift * column_index + borders.column_left_);
+        result_image[line_index].push_back(GetMiddleValue(
+          Borders(current_string_up
+          , current_column_left
+          , min(current_string_up + string_shift, borders.string_down_)
+          , min(current_column_left + column_shift, borders.column_right_)
+          )));
+      }
+    }
+
+    for (int line_index = 0; line_index < kResultSize; ++line_index) {
+      copy(result_image[line_index].begin()
+          , result_image[line_index].end()
+          , pixels_[borders.string_up_ + line_index].begin() + borders.column_left_
+          );
+    }
+    borders.string_down_ = borders.string_up_ + kResultSize;
+    borders.column_right_ = borders.column_left_ + kResultSize;
+  }
+
+  // symbol characteristics
+
+  bool IsFour(const Borders &borders) const {
+    int left_zero_column = borders.string_down_;
+    for (int string_id = borders.string_up_; string_id < borders.string_down_; ++string_id) {
+      if (pixels_[string_id][borders.column_left_] != 0) {
+        left_zero_column = string_id;
+        break;
+      }
+    }
+    if (left_zero_column == borders.string_down_) {
+      return false;
+    }
+    // walk up
+    int prev_left_zero = borders.column_left_;
+    int current_left_zero;
+    for (int string_id = left_zero_column - 1; string_id >= borders.string_up_; --string_id) {
+      current_left_zero = borders.column_left_;
+      while (pixels_[string_id][current_left_zero] == 0 && current_left_zero < borders.column_right_) {
+        current_left_zero++;
+      }
+      if (current_left_zero - prev_left_zero > 2 || current_left_zero < prev_left_zero) {
+        // too fast or bad glyph
+        return false;
+      }
+      prev_left_zero = current_left_zero;
+    }
+    if (prev_left_zero - borders.column_left_ < 3) {
+      return false;
+    }
+
+    // walk down
+    prev_left_zero = borders.column_left_;
+    bool is_big_leap_found = false;
+    for (int string_id = left_zero_column + 1; string_id < borders.string_down_; ++string_id) {
+      current_left_zero = borders.column_left_;
+      while (pixels_[string_id][current_left_zero] == 0 && current_left_zero < borders.column_right_) {
+        current_left_zero++;
+      }
+      if (is_big_leap_found) {
+        // check small modifications to down
+        if (current_left_zero > prev_left_zero || current_left_zero - prev_left_zero > 1) {
+          return false;
+        }
+      } else if (current_left_zero - prev_left_zero > 2) {
+        is_big_leap_found = true;
+        prev_left_zero = current_left_zero;
+      } else {
+        prev_left_zero = current_left_zero;
+      }
+    }
+    return is_big_leap_found;
+  }
+
+  bool IsSeven(const Borders &borders) const {
+    // check slow right up
+    int down_non_zero_column = borders.column_right_ - 1;
+    for (int column_id = borders.column_right_ - 1; column_id > borders.column_left_; --column_id) {
+      if (pixels_[borders.string_down_ - 1][column_id] != 0) {
+        down_non_zero_column = column_id;
+        break;
+      }
+    }
+    int string_id = borders.string_down_ - 1;
+    int prev_non_zero_column = down_non_zero_column;
+    for (; string_id >= borders.string_up_; --string_id) {
+      int current_non_zero_column = borders.column_right_ - 1;
+      int column_id = borders.column_right_ - 1;
+      for (; column_id >= borders.column_left_; --column_id) {
+        if (pixels_[string_id][column_id] != 0) {
+          current_non_zero_column = column_id;
+          break;
+        }
+      }
+      if (current_non_zero_column < prev_non_zero_column) {
+        return false;
+      }
+      // check empty string
+      if (column_id >= borders.column_left_) {
+        prev_non_zero_column = current_non_zero_column;
+      }
+    }
+    if (prev_non_zero_column == borders.column_right_ - 1 
+        && down_non_zero_column != prev_non_zero_column
+        ) {
+      return true;
+    }
+    return false;
+  }
+
+  int FindFirstNotZero(int string_id, int column_left_id, int column_right_id) const {
+    int column_id = column_left_id;
+    for (; column_id < column_right_id; ++column_id) {
+      if (pixels_[string_id][column_id] != 0) {
+        break;
+      }
+    }
+    return column_id;
+  }
+
+  // @return in case of emtpy string: (column_left_id - 1)
+  int FindLastNotZero(int string_id, int column_left_id, int column_right_id) const {
+    int column_id = column_right_id - 1;
+    for (; column_id >= column_left_id; --column_id) {
+      if (pixels_[string_id][column_id] != 0) {
+        break;
+      }
+    }
+    return column_id;
+  }
+
+  int GetCountMiddleElements(int string_id, int column_left_id, int column_right_id) const {
+    int left_not_zero = FindFirstNotZero(string_id, column_left_id, column_right_id);
+    if (left_not_zero == column_right_id) {
+      return 0;
+    }
+    int right_not_zero = FindLastNotZero(string_id, column_left_id, column_right_id);
+    for (int column_id = left_not_zero; column_id <= right_not_zero; ++column_id) {
+      if (pixels_[string_id][column_id] == 0) {
+        // bad sequence
+        return 0;
+      }
+    }
+    return right_not_zero - left_not_zero + 1;
+  }
+
+  bool HasVerticals(const Borders &borders) const {
+    bool found = false;
+    int column_id = borders.column_left_;
+    for (; !found && column_id < borders.column_right_; ++column_id) {
+      found = true;
+      for (int string_id = borders.string_up_; string_id < borders.string_down_; ++string_id) {
+        if (pixels_[string_id][column_id] == 0) {
+          found = false;
+          break;
+        }
+      }
+    }
+    return found;
+  }
+
+  bool IsOne(const Borders &borders) const {
+    int middle_line = (borders.string_up_ + borders.string_down_) / 2;
+    int up_line = max(borders.string_up_, middle_line - 1);
+    int down_line = min(borders.string_down_, middle_line + 3);
+
+    int count_not_zero = GetCountMiddleElements(up_line
+        , borders.column_left_
+        , borders.column_right_
+        );
+
+    if (count_not_zero == 0) {
+      return false;
+    }
+
+    for (int line_id = up_line + 1; line_id < down_line; ++line_id) {
+      if (count_not_zero != GetCountMiddleElements(line_id
+          , borders.column_left_
+          , borders.column_right_
+          )) {
+        return false;
+      }
+    }
+
+    if (count_not_zero > 3) {
+      return HasVerticals(borders);
+    }
+    return true;
+  }
+
+  bool SmoothRightBorder(const Borders &borders) const {
+    int column_up_right_not_zero = FindLastNotZero(borders.string_up_
+        , borders.column_left_
+        , borders.column_right_
+        );
+    int previous_not_zero = column_up_right_not_zero;
+    int string_id = borders.string_up_ + 1;
+    for (; string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindLastNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero >= previous_not_zero) {
+        if (current_not_zero - previous_not_zero > 2) {
+          // very fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        previous_not_zero = current_not_zero;
+        string_id++;
+        break;
+      }
+    }
+
+    for (;string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindLastNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero <= previous_not_zero) {
+        if (previous_not_zero - current_not_zero > 2) {
+          // very fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        // not simple border
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool SmoothLeftBorder(const Borders &borders) const {
+    int column_up_right_not_zero = FindFirstNotZero(borders.string_up_
+        , borders.column_left_
+        , borders.column_right_
+        );
+    int previous_not_zero = column_up_right_not_zero;
+    int string_id = borders.string_up_ + 1;
+    for (; string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindFirstNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (previous_not_zero >= current_not_zero) {
+        if (previous_not_zero - current_not_zero > 2) {
+          // very fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        previous_not_zero = current_not_zero;
+        string_id++;
+        break;
+      }
+    }
+
+    for (;string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindFirstNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero >= previous_not_zero) {
+        if (current_not_zero - previous_not_zero > 2) {
+          // very fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        // not simple border
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool IsSix(const Borders &borders) const {
+    int right_up_first = FindLastNotZero(borders.string_up_
+        , borders.column_left_
+        , borders.column_right_
+        );
+    int right_up_second = FindLastNotZero(borders.string_up_ + 1
+        , borders.column_left_
+        , borders.column_right_
+        );
+    return right_up_second < right_up_first;
+  }
+
+  bool RightZigZag(const Borders &borders) const {
+    const int zig_zag_fast = 2;
+    int right_up_first = FindLastNotZero(borders.string_up_
+        , borders.column_left_
+        , borders.column_right_
+        );
+    int string_id = borders.string_up_ + 1;
+    int previous_not_zero = right_up_first;
+    for (; string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindLastNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero >= previous_not_zero) {
+        if (current_not_zero - previous_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        if (previous_not_zero - current_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+        string_id++;
+        break;
+      }
+    }
+    if (string_id == borders.string_down_) {
+      return false;
+    }
+    for (; string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindLastNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero <= previous_not_zero) {
+        if (previous_not_zero - current_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        if (current_not_zero - previous_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+        string_id++;
+        break;
+      }
+    }
+    if (string_id == borders.string_down_) {
+      return false;
+    }
+    for (; string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindLastNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero >= previous_not_zero) {
+        if (current_not_zero - previous_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        if (previous_not_zero - current_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;        
+        break;
+      }
+    }
+    if (string_id == borders.string_down_) {
+      return false;
+    }
+    string_id++;
+    for (; string_id < borders.string_down_; ++string_id) {
+      int current_not_zero = FindLastNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero <= previous_not_zero) {
+        if (previous_not_zero - current_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+      } else {
+        if (current_not_zero - previous_not_zero > zig_zag_fast) {
+          // too fast
+          return false;
+        }
+        previous_not_zero = current_not_zero;
+        string_id++;
+        break;
+      }
+    }
+    return string_id == borders.string_down_;
+  }
+
+  bool LeftDownJump(const Borders &borders) const {
+    int previous_not_zero = FindFirstNotZero(borders.string_down_ - 1
+          , borders.column_left_
+          , borders.column_right_
+          );
+    for (int string_id = borders.string_down_ - 2; string_id >= borders.string_up_; --string_id) {
+      int current_not_zero = FindFirstNotZero(string_id
+          , borders.column_left_
+          , borders.column_right_
+          );
+      if (current_not_zero - previous_not_zero > 3) {
+        return true;
+      }
+      previous_not_zero = current_not_zero;
+    }
+    return false;
+  }
+
+  bool HeavyBottom(const Borders &borders) const {
+    int count_elements = 0;
+    int count_not_zero = 0;
+    for (int floor_id = 1; floor_id <= 2; ++floor_id) {
+      for (int column_id = borders.column_left_; column_id < borders.column_right_; ++column_id) {
+        count_elements++;
+        if (pixels_[borders.string_down_ - floor_id][column_id] != 0) {
+          count_not_zero++;
+        }
+      }
+    }
+    return count_not_zero >= count_elements / 2;
+  }
+
+  int GuessNumber(const Borders &borders) const {
+    if (IsFour(borders)) {
+      return 4;
+    }
+    if (IsSeven(borders)) {
+      return 7;
+    }
+    if (IsOne(borders)) {
+      return 1;
+    }
+    bool is_right_smooth = SmoothRightBorder(borders);
+    bool is_left_smooth = SmoothLeftBorder(borders);
+    if (is_right_smooth) {
+      if (is_left_smooth) {
+        return 0;
+      }
+      return 9;
+    }
+    if (is_left_smooth && IsSix(borders)) {
+      return 6;
+    }
+    bool is_left_jump = LeftDownJump(borders);
+    if (RightZigZag(borders)) {
+      if (is_left_jump) {
+        return 3;
+      }
+      return 8;
+    }
+    if (is_left_jump || !HeavyBottom(borders)) {
+      return 5;
+    }
+    return 2;
+  }
+
+ public:
+  Image() 
+      : width_(0)
+      , height_(0)
+      {
+  }
+
+  ~Image() {
+  }
+
+  void ReadImage(const vector<vector<int> > &data) {
+    pixels_ = data;
+    width_ = pixels_[0].size();
+    height_ = pixels_.size();
+  }
+
+  void Show() const {
+    _Show(Borders(0, 0, height_, width_));
+  }
+
+  void SplitImage(int count = 3) {
+    for (int figure_id = 0; figure_id < count; ++figure_id) {
+      int left_border = figure_id * width_ / count;
+      int right_border = (figure_id + 1) * width_ / count;
+      digits_.push_back(Borders(0, left_border, height_, right_border));
+    }
+  }
+
+  void FixBorders() {
+    for (int figure_id = 0; figure_id < digits_.size(); ++figure_id) {
+      _FixBorders(digits_[figure_id]);
+    }
+  }
+
+  void CleanFigures() {
+    for (int figure_id = 0; figure_id < digits_.size(); ++figure_id) {
+      _CleanFigures(digits_[figure_id]);
+    }
+    FixBorders();
+  }
+
+  void CreatMiddleFigures() {
+    for (int figure_id = 0; figure_id < digits_.size(); ++figure_id) {
+      _CreateMiddleFigures(digits_[figure_id]);
+    }
+    FixBorders();
+  }
+
+  void ShowFigures() const {
+    for (int figure_id = 0; figure_id < digits_.size(); ++figure_id) {
+      _Show(digits_[figure_id]);
+      cerr << endl;
+    }
+  }
+
+  int GetNumbers() const {
+    int result_number = 0;
+    for (int figure_id = 0; figure_id < digits_.size(); ++figure_id) {
+      _Show(digits_[figure_id]);
+      cerr << endl;
+      result_number = GuessNumber(digits_[figure_id]) + 10 * result_number;
+    }
+    return result_number;
+  }
+
+  int GuessHowManyFigures() {
+    cerr << endl;
+
+    int good_additional = 0;
+    Borders all_area(0, 0, height_, width_);
+    vector<int> figures_with_weight = _MarkFigures(all_area, good_additional);
+    
+    int max_weight = *max_element(figures_with_weight.begin(), figures_with_weight.end());
+
+    vector<int>::iterator it = remove_if(figures_with_weight.begin()
+        , figures_with_weight.end()
+        , bind2nd(less<int>(), max_weight / 3)
+        );
+    figures_with_weight.resize(it - figures_with_weight.begin());
+    for (vector<int>::iterator it = figures_with_weight.begin()
+        ; it != figures_with_weight.end()
+        ; ++it
+        ) {
+      cerr << *it << endl;
+    }
+    cerr << "Left elements: " << figures_with_weight.size() << endl;
+
+    int count_figures = figures_with_weight.size();
+    sort(figures_with_weight.begin(), figures_with_weight.end());
+    if (figures_with_weight.size() == 2) {
+      if (figures_with_weight[0] < 0.75 * figures_with_weight[1]) {
+        count_figures = 3;
+      }
+    } else if (figures_with_weight.size() > 3) {
+      // suggestion: we have border for each digit
+      count_figures /= 2;
+    } else if (figures_with_weight.size() == 1) {
+      if (width_ > height_ * 2) {
+        count_figures = 3;
+      } else if( width_ > height_ * 1.3) {
+        count_figures = 2;
+      }
+    }
+
+    CleanByAdditional(all_area, good_additional, true);
+    return count_figures;
+  }
+};
+
+
+// const int kCountEmptyLines = 5;
+// we have 5 empty lines before digits and after
+// so, we can determine the borders
+
+void Input(vector<vector<int> > *bordered_picture) {
+  string empty_line;
+  cin >> empty_line;
+  
+  string line = empty_line;
+  while (line == empty_line) {
+    cin >> line;
+  }
+
+  int left_border = empty_line.size();
+  int right_border = 0;
+
+  vector<int> numeric_line;
+  numeric_line.resize(empty_line.size());
+  vector<vector<int> > pixels;
+  for (; line != empty_line; cin >> line) {
+    bool is_first_not_empty_found = false;
+    for (int index = 0; index < line.size(); ++index) {
+      if (!is_first_not_empty_found) {
+        if (line[index] != '.') {
+          is_first_not_empty_found = true;
+          left_border = min(left_border, index);
+        }
+      }
+      if (index > right_border) {
+        if (line[index] != '.') {
+          right_border = index;
+        }
+      }
+      numeric_line[index] = GetIntFromChar(line[index]);
+    }
+    pixels.push_back(numeric_line);
+  }
+
+  bordered_picture->resize(pixels.size());
+  for (int index = 0; index < pixels.size(); ++index) {
+    (*bordered_picture)[index].resize(right_border - left_border + 1);
+    copy(pixels[index].begin() + left_border, pixels[index].begin() + right_border + 1
+      , (*bordered_picture)[index].begin());
+  }
+}
+
+int main() {
+  // freopen("1.txt", "r", stdin);
+
+  Image image;
+  vector<vector<int> > pixels;
+
+  Input(&pixels);
+  image.ReadImage(pixels);
+
+  int count_figures = image.GuessHowManyFigures();
+  cerr << "Count figures: " << count_figures << endl;
+  image.SplitImage(count_figures);
+  image.FixBorders();
+  image.CleanFigures();
+  image.CreatMiddleFigures();
+  cout << image.GetNumbers() << endl;
+  return 0;
+}

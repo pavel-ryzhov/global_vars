@@ -1,0 +1,220 @@
+#include <fstream>
+#include <iostream>
+#include <stdio.h>
+#include <string>
+#include <vector>
+#include <map>
+#include <algorithm>
+//#include <conio.h>
+
+using namespace std;
+
+
+struct SMYWORD
+{
+	string str; //слово
+	int freq; //его частота
+	int lastmeeting; //расстояние до последнего ввода. конкретно - порядковый номер с конца последнего появления такого слова в векторе UsedWords
+	bool used; //флаг, использовалось ли такое слово или нет
+};
+
+
+/*Раскладка взята со стандартной клавиатуры Nokia.
+2 - a b c
+3 - d e f
+4 - g h i
+5 - j k l 
+6 - m n o 
+7 - p q r s 
+8 - t u v 
+9 - w x y z
+*/
+int CharToButton(char ch);
+
+bool cmpf(SMYWORD w1, SMYWORD w2);
+
+int main()
+{
+	map< vector<int> , vector<SMYWORD> > mwDict; //словарь, представленный в виде ассоциативного массива. ключ - последовательность цифр, элемент - вектор слов, подходящих этой последовательности
+	bool bTypingWord = true; //bTypingWord == true, если идет ввод слова
+	char cSings[] = {'.',',','?'};
+	int N; //количество слов в словаре
+	vector<int> viWord; //содежрит цифры, введение пользователем
+	string Text; //сюда производится запись напечатанного пользователем. В конце содержимое этой строки записывается в файл "sms"
+	string input;
+
+	//Text.clear(); 
+	string str;
+	char ch;
+	int fr;
+	SMYWORD wTemp;
+	map< vector<int>  ,  vector<SMYWORD>  >::iterator mp;
+	vector<SMYWORD> vwDictTemp;
+
+	cin>>N;
+	for (int i = 0; i<N; i++)
+	{
+		cin>>str;
+		viWord.clear();
+		vwDictTemp.clear();
+		for (int i = 0; i<str.length(); i++)
+		{
+			viWord.push_back(CharToButton(str[i]));
+		}
+		wTemp.str = str;
+		cin>>fr;
+		wTemp.freq = fr;
+		wTemp.used = false;
+		wTemp.lastmeeting = 0;
+		vwDictTemp.push_back(wTemp);
+		mp = mwDict.find(viWord);
+		if (mp == mwDict.end())
+		{
+			mwDict.insert(pair< vector<int>  , vector<SMYWORD>  > (viWord, vwDictTemp));
+		}
+		else
+		{
+			(mp->second).push_back(wTemp);
+		}
+	}
+
+	ch = getchar();
+	input.clear();
+	while((ch=getchar())!=10)
+	{
+		input += ch;
+	}
+
+	viWord.clear();
+	unsigned int k = 0; //итератор для извлечения очередного символа из строки
+	bool bFileEndSpace = false;
+	do
+	{
+		switch (input[k])
+		{
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '9':
+			
+			bTypingWord = true; //раз нажата цифра (2-9), значит идет ввод слова, а не знаков препинания, пробелов и тд
+			viWord.push_back(input[k]-'0'); //накапливаем в векторе viWord цифры. Когда ввод слова будет закончен, по этой 
+										  //последовательности будет произведен поиск слов в словаре.
+			k++;
+			//извлекаем очередной символ
+
+			//если после последних цифр в строке input ничего не стоит
+			//то есть пользователь после последнего слова не нажал пробел, 1 или *, то слово все равно должно быть введено.
+			if (k==input.size()) //если конец ввода
+			{
+				bFileEndSpace = true; 
+				//chTemp = ' '; //обработаем всё так, будто пользователь ввел пробел. Break'а тут нет, так что из switcha не выходим, а попадаем в case' ':
+				//и правильно обрабатываем слово. При этом этот мнимый пробел не выводится в Text благодаря флагу bFileEndSpace.
+			}
+			else break;
+		case ' ':
+		case '1':
+		case '*':
+			if (bTypingWord) //если до этого вводилось слово
+			{
+				
+				bTypingWord = false; //ввод слова закончен
+				//FindWords(&vwWords, &viWord, &iters); //в вектор vwWords заносятся слова из файла newDictName,
+																		 //соответствующие последовательности цифр viWord.
+									//присутвие vwUsedWords необходимо для того, чтобы обработать заносимые слова для последующей правильной сортировки
+				mp = mwDict.find(viWord);
+				sort(mp->second.begin(),mp->second.end(), cmpf); //сортируются слова (с учетом всех требований). Правильная сортировка обеспечивается
+													 //перегруженным в классе WORD оператором <
+				//если '*' - обрабатываем перебор слов.
+				int iWordNumber = 0;
+				while (input[k]=='*')
+				{
+					if (++iWordNumber== mp->second.size()) iWordNumber=0;
+					k++;
+					//chTemp = input[++k];
+				}
+
+				//update
+				mp->second[iWordNumber].freq++;
+				mp->second[iWordNumber].used = true;
+				mp->second[iWordNumber].lastmeeting = k;
+				//
+
+				//Text += vwWords[iWordNumber].GetStr(); //добавляем в введенное слово в строку Text. В конце работы программы строка Text будет выведена в файл "sms"
+				cout<<mp->second[iWordNumber].str;
+				viWord.clear();
+			}
+			if ((bFileEndSpace)||(input[k] == ' '))
+			{
+				if (!bFileEndSpace) //если это не тот искуственный пробел, используемый для обработки ситуации, когда после последнего слова
+									//не нажат ни пропел, ни знак препинания, ни *
+				{
+					//Text += ' ';
+					cout<<' ';
+					//chTemp = input[++k];
+					k++;
+				}
+				break;
+			}
+			if (input[k] == '1') //знак препинания
+			{
+				int iSignNumber = 0;
+				//chTemp = input[++k]; //извлекаем очередной символ
+				k++;
+				while (input[k]=='*') //если (и пока) это '*' - перебираем знаки препинания, хранящиеся в массиве cSings[] = {'.',',','?'}
+				{
+					if (iSignNumber==2) iSignNumber=0;
+					else iSignNumber++;
+					//chTemp = input[++k];
+					k++;
+				}
+				//Text += cSings[iSignNumber]; //заносим в Text выбранный знак препинания
+				cout<<cSings[iSignNumber];
+			}
+			break;
+		default:
+			cout<<"wrong symbol"<<endl;
+			return 1;
+			break;
+		}
+	} while (k<input.size()); //и так обрабатываем всю строку. 
+	//cout<<Text<<endl;
+	//delete [] vwDict;
+	//_getch();
+	return 0;
+}
+
+int CharToButton(char ch)
+{
+	if ((ch>='a')&&(ch<='c')) return 2;
+	if ((ch>='d')&&(ch<='f')) return 3;
+	if ((ch>='g')&&(ch<='i')) return 4;
+	if ((ch>='j')&&(ch<='l')) return 5;
+	if ((ch>='m')&&(ch<='o')) return 6;
+	if ((ch>='p')&&(ch<='s')) return 7;
+	if ((ch>='t')&&(ch<='v')) return 8;
+	if ((ch>='w')&&(ch<='z')) return 9;
+	return -1;
+}
+
+bool cmpf(SMYWORD w1, SMYWORD w2)
+{
+	//cout<<"operator"<<endl;
+	if (w1.freq != w2.freq) //если частоты разные, то просто сравниваем частоты
+		return w1.freq > w2.freq;
+	//далее, если частоты одинаковые
+	if (w1.used && w2.used) //если оба слова встречались, то упорядочиваем по тому, какое из них последний раз вводилось позже
+		return w1.lastmeeting > w2.lastmeeting;
+	//если встречалось только одно слово, то сравнение в пользу того, которое встречалось
+	if (w1.used && (!w2.used))
+		return true;
+	if (w2.used && (!w1.used))
+		return false;
+	
+	//если частоты одинаковые и ни одно из слов не встречалось, то оставляем по алфавиту.
+	return (w1.str.compare(w2.str)<0);
+}

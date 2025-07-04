@@ -1,0 +1,2056 @@
+#include <algorithm>
+#include <vector>
+#include <iostream>
+#include <string>
+#include <math.h>
+#include <map>
+#include <fstream>
+
+using namespace::std;
+
+class Recognizer {
+  vector<vector<char> > image_;
+  vector<vector<vector<char> > > table_digits_;
+  map<int, vector<vector<vector<char> > > > num_map_;
+  string filename_;
+
+  bool edges_det (int top, int bottom, int left, int right, int *d_top, int *d_bottom, int *d_left, int *d_right) {
+    *d_top = -1;
+    *d_bottom = -1;
+    *d_left = -1;
+    *d_right = -1;
+    for(int i = top; i <= bottom; ++i) {
+      for (int j = left; j <= right; ++j) {
+        if (image_[i][j] != '.') {
+          *d_top = i;
+          break;
+        }
+      }
+      if (*d_top >= 0) {
+        break;
+      }
+    }
+
+    for (int j = left; j < right; ++j) {
+      for (int i = top; i <= bottom; ++i) {
+        if (image_[i][j] != '.') {
+          *d_left = j;
+          break;
+        } 
+      } 
+      if (*d_left >= 0) {
+        break;
+      }
+    }
+
+    for (int i = bottom; i >= top; --i) {
+      for (int j = left; j <= right; ++j) {
+        if (image_[i][j] != '.') {
+          *d_bottom = i;
+          break;
+        }
+      } 
+      if (*d_bottom >= 0) 
+      {
+        break;
+      }
+    }
+
+    for (int j = right; j >= left; --j) {
+      for (int i = top; i <= bottom; ++i) {
+        if (image_[i][j] != '.') {
+          *d_right = j;
+          break;
+        }
+      } 
+      if (*d_right >= 0) {
+        break;
+      }
+    }
+    return *d_top >=0 && *d_bottom >= 0 && *d_left >= 0 && *d_right >= 0;
+  }
+
+  double get_char_weight(char ch) {
+    switch (ch) {
+      case '.': return 0;
+      case '%': return  0.33;
+      case '#': return 0.66;
+      case '@': return 1.0;       
+    } 
+  }
+
+  double count_color(double row, double col, double v_step, double g_step, int bottom, int right) {
+    int first_row = floor(row);
+    int first_col = floor(col);
+    int last_row;
+    if ((row + v_step) < bottom) {
+      last_row = ceil(row + v_step);
+    } else {
+      last_row = bottom;
+    }
+    int last_col;
+    if (col + g_step < right) {
+      last_col = ceil(col + g_step);
+    } else {
+      last_col = right;
+    }
+    double weight = 0.0;
+    double mult_row_first = 1.0 - row + first_row;
+    double mult_row_last = 1.0 + row + v_step - last_row ;
+    double mult_col;
+    for (int j = first_col; j <= last_col; ++j) {
+      if (j == first_col) {
+        mult_col = 1.0 - col + first_col;
+      } else if (j == last_col) {
+        mult_col = 1.0 - last_col + col + g_step;
+      } else {
+        mult_col = 1.0;
+      } 
+      weight += get_char_weight(image_[first_row][j]) * mult_row_first * mult_col;
+      weight += get_char_weight(image_[last_row][j]) * mult_row_last * mult_col;
+    }
+
+    double mult_col_first = 1.0 - col + first_col;
+    double mult_col_last = 1.0 + col + g_step - last_col;
+
+    for (int i = first_row + 1; i <= last_row - 1; ++i) {
+      weight += get_char_weight(image_[i][first_col]) * 1.0 * mult_col_first;
+      weight += get_char_weight(image_[i][last_col]) * 1.0 * mult_col_last;
+    }
+    
+    ++first_row;
+    --last_row;
+    ++first_col;
+    --last_col;
+
+    for (int i = first_row; i <= last_row; ++i) {
+      for (int j = first_col; j <= last_col; ++j) {
+        weight += get_char_weight(image_[i][j]);
+      }
+    }
+    
+    return weight;
+  }
+
+ 
+  double sum_edge(int column) {
+    double sum = 0.0;
+    for (int i = 0; i < image_.size(); ++i) {
+      sum += get_char_weight(image_[i][column]);
+    }
+    return sum;;
+  }
+
+  int get_edge(int column, int delta) {
+    double min_sum = 100000;
+    int min_column;
+    for (int i = -delta; i <= delta; ++i) {
+      double cur_sum = sum_edge(column + i);
+      if (cur_sum < min_sum) {
+        min_sum = cur_sum;
+        min_column = column + i;
+      }
+    }
+    return min_column;
+  }
+
+  void check_edge(int digit_count, int left, int right, vector<int> *edges) {
+    double width = right - left;
+    for (int i = 0; i < digit_count - 1; ++i) {
+      (*edges)[i] = get_edge(left + (i + 1) * width / digit_count, width / digit_count / 2 - 1);
+    }
+    (*edges)[digit_count - 1] = right;
+  }
+
+  bool digit_det(int digit_count, int top, int bottom, int left, int right) {
+    int d_top, d_bottom, d_left, d_right;
+    vector<int> edges(digit_count);
+    check_edge(digit_count, left, right, &edges);
+    table_digits_.clear();
+    table_digits_.resize(digit_count);
+    int cur_left = left;
+    int cur_right = edges[0];
+    for (int i = 0; i < digit_count; ++i) {
+      if (!edges_det(top, bottom, cur_left, cur_right, &d_top, &d_bottom, &d_left, &d_right)) return false;
+      double d_v = (d_bottom - d_top + 1) / 16.0;
+      double d_g = (d_right - d_left + 1) / 16.0;
+      string fname;
+      switch (i) {
+        case 0: fname = filename_ + "first"; break;
+        case 1: fname = filename_ + "second"; break;
+        case 2: fname = filename_ + "third";
+      }
+      if (digit_count == 1) {
+        fname += "1";
+      } 
+      if (digit_count == 2) {
+        fname += "2";
+      }
+      if (digit_count == 3) {
+        fname += "3";
+      }
+      repaint(d_top, d_bottom, d_left, d_right, d_v, d_g, table_digits_[i], fname);
+      cur_left = cur_right;
+      cur_right = i == (digit_count - 2) ? right : edges[i + 1];
+    }
+    return true;
+  }
+
+  vector<double> get_number_weight(int d_count, int *number) {
+    vector<int> res_num;
+    vector<double> res_weight;
+    double max_w = 0;
+    int max_v;
+    for (int i = 0; i < d_count; ++i) {
+      for (int dig = 0; dig < 10; ++dig) {
+        double cur_w = get_match(i, (num_map_.find(dig))->second);  
+        if (cur_w > max_w) {
+          max_w = cur_w;
+          max_v = dig;
+        }
+      }
+      res_num.push_back(max_v);
+      res_weight.push_back(max_w);
+      max_w = 0;
+    }
+    int mult = 1;
+    max_w = 0;
+    for (int i = res_num.size() - 1; i >= 0; --i) {
+      *number += res_num[i] * mult;
+      mult *= 10;
+      max_w += res_weight[i];
+    }
+    return res_weight;
+  }
+
+  bool is_valid(int k) {
+    return k >= 0 && k < 16;
+  }
+
+  double get_diff(const vector<vector<char> > &fi,
+                      const vector<vector<char> > &se, int v, int g) {
+    double diff = 0;
+    int size = 0;
+    for (int i = 0; i < 16; ++i) 
+      for (int j = 0; j < 16; ++j) {
+        if (fi[i][j] == '@') {
+          ++size;
+          double approx_equal = 1;
+          int ii = i + v;
+          int jj = j + g;
+          if (is_valid(ii, jj) && fi[i][j] == se[ii][jj]) {
+            approx_equal = 0;
+          }
+          diff += approx_equal;
+        }
+      }
+    return diff;
+  }
+
+  double shift_m(const vector<vector<char> > &in,
+               vector<vector<char> > &out) {
+    double diff = 0;
+    out.clear();
+    out.resize(16, vector<char>(16, '.'));
+    for (int i = 0; i < 16; ++i) {
+      for (int j = 0; j < 16; ++j) {
+        if (j - (15 - i) >= 0) out[i][j-(15-i)] = in[i][j];
+        else if (in[i][j] == '@') diff += 1;
+      }
+    }
+    return diff;
+  }
+  
+  double get_approx_diff(const vector<vector<char> > &fi,
+                   const vector<vector<char> > &se) {
+    double diff = 16*16;
+    for (int g_shift = -4; g_shift <= 4; ++g_shift) {
+      for (int v_shift = -1; v_shift <= 1; ++v_shift) {
+        double cdiff = get_diff(fi, se, v_shift, g_shift);
+        if (diff > cdiff) diff = cdiff;
+      }
+    }
+    vector<vector<char> > shi;
+    double cdiff = shift_m(fi, shi);
+    cdiff += get_diff(shi, se, 0, 0);
+    if (cdiff < diff) diff = cdiff;
+    return diff;
+  }
+
+  double get_min_diff(const vector<vector<char> > &fi,
+                   const vector<vector<char> > &se) {
+    return get_approx_diff(fi, se) + get_approx_diff(se, fi);
+  }
+
+  double get_match(int dig_number, const vector<vector<vector<char> > > &pattern) {
+    double poten = 1;
+    double dist = 0;
+    vector<double> potens;
+    for (int k = 0; k < pattern.size(); ++k) {
+      dist = get_min_diff(table_digits_[dig_number], pattern[k]);
+      potens.push_back(exp(-dist / 100.0));
+   }
+    
+    sort(potens.rbegin(), potens.rend());
+    for (int i = 0; i < 4; ++i) {
+      poten *= potens[i];
+    }
+    return poten;
+  }
+
+  void print_table(const vector<vector<char> > &table, ostream &fout) {
+    for (int i = 0; i < table.size(); ++i) {
+      for (int j = 0; j < table.front().size(); ++j) {
+        fout << table[i][j] << " ";
+      }
+      fout << "\n";
+    }
+  }
+
+  bool is_valid(int i, int j) {
+    return i >= 0 && j >= 0 && i < 16 && j < 16;
+  }
+
+  void unheavy_table(const vector<vector<double> > &float_table,
+                     vector<vector<char> > &table) {
+    int n = float_table.size();
+    int m = float_table.front().size();
+    table.resize(n, vector<char>(m));
+    vector<double> threshold(m);
+    for (int j = 0; j < m; ++j) {
+      threshold[j] = 0;
+      for (int i = 0; i < n; ++i) {
+        threshold[j] += float_table[i][j];
+      }
+      threshold[j] /= 2*n;
+    }
+
+    for (int j = 1; j < m-1; ++j) {
+      threshold[j] = (threshold[j-1] + threshold[j] + threshold[j+1]) / 3.0;
+    }
+
+    for (int j = 0; j < m; ++j) {
+      for (int i = 0; i < n; ++i) {
+        double weight = 0;
+        for (int di = -1; di <= 1; ++di)
+          for (int dj = -1; dj <= 1; ++dj) {
+            int ii = i + di;
+            int jj = j + dj;
+            if (is_valid(ii, jj)) {
+              weight += float_table[ii][jj];
+            }
+          }
+        table[i][j] = weight / 9 > threshold[j] * 1.2  && float_table[i][j] > threshold[j] *1.65 ? '@' : '.';
+      }
+    }
+  }
+ 
+ void repaint(int top, int bottom, int left, int right, double v_step, double g_step, vector<vector<char> > &table, const string &fname) {
+    vector<vector<double> > float_table;
+    for (double i = top; i < bottom + 1; i += v_step) {
+      float_table.push_back(vector<double>(0));
+      for (double j = left; j < right + 1; j += g_step) {
+        double float_color = count_color(i, j, v_step, g_step, bottom, right);
+        float_table.back().push_back(float_color);
+      }
+    }
+
+    unheavy_table(float_table, table);
+
+    ofstream fout(fname.c_str());
+    //print_table(table, fout);
+  }
+
+  void to_char(const char *data, vector<vector<char> > *matrix) {
+    int index = 0;
+    matrix->resize(16);
+    for (int i = 0; i < 16; ++i) {
+      (*matrix)[i].clear();
+      for (int j = 0; j < 16; ++j) {
+        (*matrix)[i].push_back(data[index++]);
+        if (j < 15) index++;
+      }
+    }
+  }
+
+  void align(int top, int bottom, int left, int right) { 
+    vector<int> columns;
+    for (int i = bottom; i >= top; --i) {
+      for (int j = right; j >= left; --j) {
+        if (image_[i][j] != '.') {
+          columns.push_back(j);
+          break;
+        }
+      }
+    }
+    vector<int> columns_f;
+    for (int i = top; i <= bottom; ++i) {
+      for (int j = left; j <= right; ++j) {
+        if (image_[i][j] != '.') {
+          columns_f.push_back(j);
+          break;
+        }
+      }
+    }
+    int cur_v = 0;
+    for (int i = 0; i < columns.size(); ++i) {
+      if (columns[i] <= cur_v) {
+        columns.erase(columns.begin() + i);
+        --i;
+      } else {
+        cur_v = columns[i];
+      }
+    }
+    cur_v = 1000;
+    for (int i = 0; i < columns_f.size(); ++i) {
+      if (columns_f[i] >= cur_v) {
+        columns_f.erase(columns_f.begin() + i);
+        --i;
+      } else {
+        cur_v = columns_f[i];
+      }
+    }
+    
+    if ( (columns.size() * 1.0 / (bottom - top) > 0.35) && (columns_f.size() * 1.0 / (bottom - top) > 0.5) && !is_font_straight(left, right)) {
+      double tg = ((columns.back() - columns.front()) * 0.8) * 1.0 / (bottom - top);
+        for (int i = top; i <= bottom; ++i) {
+          int co = floor(tg * (i - top - 1));
+          for (int j = right; j >= left; --j) {
+            if ((j - co) >= 0) {
+              image_[i][j] = image_[i][j - co];   
+            } else {
+              image_[i][j] = '.';
+            }
+          }
+        }
+    }
+  }
+
+  bool is_font_straight(int left, int right) {
+    for (int j = left + 3; j <= right - 3; ++j) {
+      if (sum_edge(j) < 1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+
+  void fill_num_map() {
+    num_map_[0] = vector<vector<vector<char> > >(0);
+    num_map_[1] = vector<vector<vector<char> > >(0);
+    num_map_[2] = vector<vector<vector<char> > >(0);
+    num_map_[3] = vector<vector<vector<char> > >(0);
+    num_map_[4] = vector<vector<vector<char> > >(0);
+    num_map_[5] = vector<vector<vector<char> > >(0);
+    num_map_[6] = vector<vector<vector<char> > >(0);
+    num_map_[7] = vector<vector<vector<char> > >(0);
+    num_map_[8] = vector<vector<vector<char> > >(0);
+    num_map_[9] = vector<vector<vector<char> > >(0);
+
+    vector<vector<char> > matrix;
+    
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ . . @ @ @ @ @ @ @ @ . ."
+  ". . . . . . @ @ @ @ @ @ @ @ . ."
+  ". . . . . . @ @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ . . . . . . ."
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . @ @ @ @ @ @ . . . . @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ . . @ @ @ @ @ @ . . . . ."
+  "@ @ @ @ . . . . @ @ . . . . . ."
+  "@ @ @ @ . . . @ @ . . . . . . ."
+  ". . . . . . @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . @ @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  ". @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ . . . . . ."
+  , &matrix);
+
+num_map_[3].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ @ . . . ."
+  "@ @ . . . @ @ @ @ @ @ . . . . ."
+  "@ @ . . @ @ @ @ @ @ . . . . . ."
+  "@ @ . . @ @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ @ . . . . . ."
+  ". . . . @ @ @ @ @ . . . . . . ."
+  ". . . . . . . @ @ . . . . . . ."
+  , &matrix);
+num_map_[7].push_back(matrix);
+    to_char(
+    ". . . . @ @ @ @ @ @ @ @ @ . . ."
+    ". . . @ @ @ @ . . @ @ @ @ . . ."
+    ". . . @ @ @ . . . . @ @ @ @ . ."
+    ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+    ". @ @ @ @ . . . . . . @ @ @ @ ."
+    ". @ @ @ @ . . . . . . @ @ @ @ ."
+    ". @ @ @ @ @ . . . . @ @ @ @ @ @"
+    ". @ @ @ @ . . . . . . @ @ @ @ @"
+    ". @ @ @ @ . . . . . . @ @ @ @ @"
+    ". @ @ @ @ @ . . . . @ @ @ @ @ @"
+    ". @ @ @ @ . . . . . . @ @ @ @ ."
+    ". @ @ @ @ . . . . . . @ @ @ @ ."
+    ". . @ @ @ @ . . . . @ @ @ @ . ."
+    ". . . @ @ @ @ . . @ @ @ @ . . ."
+    ". . . . @ @ @ @ @ @ @ @ @ . . ."  
+    ". . . . @ @ @ @ @ @ @ @ . . . ." 
+    , &matrix);
+     num_map_[0].push_back(matrix);
+to_char(
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ . . . . . @ @ @ @ . ."
+  ". @ @ @ @ . . . . . . @ @ @ . ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  ". @ @ @ @ @ . . . . @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ . . . . . . . @ @ @ @ ."
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  ". @ @ @ @ . . . . . @ @ @ @ . ."
+  ". . @ @ @ @ @ . . . @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". . @ @ @ @ @ @ @ @ @ . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ . . . . ."
+  "@ @ @ . . @ @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ . . . . . . @ @ @ @ . ."
+  ". @ @ @ . . . . . . @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . . @ @ @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ ."
+  "@ @ @ @ @ . . . . @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ . . . . . . ."
+  , &matrix);
+num_map_[3].push_back(matrix);
+
+to_char(
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  "@ @ @ @ . . . . . . . @ @ @ @ ."
+  "@ @ @ . . . . . . . . . @ @ @ ."
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  ". @ @ @ . . . . . . . @ @ @ @ @"
+  ". @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ @ @ @ . @ @ @ @"
+  ". . . . . . @ @ . . . . @ @ @ ."
+  ". @ @ . . . . . . . . . @ @ @ ."
+  "@ @ @ @ . . . . . . . @ @ @ . ."
+  ". @ @ @ @ @ . . . @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ . . . . . ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+to_char(
+  ". . . . . . . . . @ @ @ . . . ."
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ . . @ @ @ . . . ."
+  ". . . @ @ @ @ . . @ @ @ @ . . ."
+  ". . @ @ @ @ . . . @ @ @ @ . . ."
+  ". @ @ @ . . . . . @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . . . @ @ @ @ . . ."
+  ". . . . . . . . . @ @ @ @ . . ."
+  ". . . . . . . . . @ @ @ . . . ."
+  , &matrix);
+num_map_[4].push_back(matrix);
+to_char(
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . @ @ @ @ @ @ @"
+  ". . . . . @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . . . @ @ @ @ @ @"
+  "@ @ @ . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . . @ @ @ @ @ . ."
+  "@ @ @ @ . . . . . . @ @ @ @ . ."
+  ". . . . . . . . . . @ @ @ @ . ."
+  ". . . . . . . . . . @ @ @ @ . ."
+  ". . . . . . @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . @ @ @ @ @"
+  "@ @ @ @ . . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[3].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ . ."
+  "@ @ @ @ . . . . . . @ @ @ @ @ ."
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ ."
+  "@ @ @ . . . . . . . . @ @ @ @ @"
+  "@ @ @ . . . . . . . . @ @ @ @ @"
+  "@ @ @ . . . . . . . . @ @ @ @ @"
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ ."
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[0].push_back(matrix);
+
+to_char(
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ . . . . . . . . . . ."
+  ". @ @ @ @ . . . . . . . . . . ."
+  ". @ @ @ . . . . . . . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  "@ @ @ . . . . . . . . @ @ @ @ ."
+  "@ @ @ @ . . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ . . . . @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ . . . @ @ @ @ . ."
+  ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+  ". . @ @ @ . . . . . @ @ @ @ @ ."
+  ". . . . . . . . . @ @ @ @ . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  "@ . . . . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[3].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ . @ @ . . . . ."
+  ". . @ @ @ @ . . . . @ @ @ @ . ."
+  ". @ @ @ @ . . . . . . @ @ @ @ ."
+  ". @ @ @ . . . . . . . . @ @ @ ."
+  ". @ @ . . . . . . . . . @ @ @ ."
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  ". @ @ @ . . . . . . . . @ @ @ @"
+  ". @ @ @ . . . . . . . @ @ @ @ @"
+  ". . @ @ @ . . . . . . @ @ @ @ ."
+  ". . @ @ @ @ . . . @ @ @ @ @ @ ."
+  ". . . . . @ @ . . . . @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ . ."
+  ". . . . . . . . . . @ @ @ @ . ."
+  ". @ @ . . . . . . @ @ @ . . . ."
+  ". @ @ @ . . . . @ @ @ . . . . ."
+  ". . @ @ @ @ @ @ . . . . . . . ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+to_char(
+  ". . . . . @ @ @ @ @ @ @ . . . ."
+  ". . @ @ . . . . . . @ @ @ @ . ."
+  ". @ @ . . . . . . . . @ @ @ @ ."
+  ". @ @ . . . . . . . . . @ @ @ ."
+  ". @ @ . . . . . . . . . @ @ @ ."
+  ". @ @ @ . . . . . . . @ @ @ @ ."
+  ". . @ @ @ @ . . . . @ @ @ @ @ ."
+  ". . . . . . . . . . @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ . . . . . . . ."
+  ". . . . . @ @ . . . . . . . . ."
+  ". . @ @ @ @ . . . . . . . @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . . . . @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ . . . . . . ."
+  ". @ @ @ @ . . . . . . . . . . ."
+  ". @ @ @ . . . . . . . . . . . ."
+  "@ @ @ . . . . . . . . . . . . ."
+  "@ @ . . @ @ @ @ @ @ @ . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ . . . . . . @ @ @ @ @ ."
+  "@ @ @ . . . . . . . . @ @ @ @ @"
+  "@ @ . . . . . . . . . . @ @ @ @"
+  "@ @ . . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ . . @ @ @ @ . . ."
+  ". @ @ @ . . . . . . . . @ @ . ."
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ ."
+  ". . @ @ @ . . . . . . @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[0].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ . . . . . . . . . . . ."
+  "@ @ @ @ . . . . . . . . . . . ."
+  "@ @ @ . . . . . . . . . . . . ."
+  "@ @ @ @ . @ @ @ @ @ @ . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ . . . . . . . . . . ."
+  ". @ @ @ @ @ @ @ . @ @ . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . . . @ @ @ @ @ @ @ @"
+  ". . . . . . . . . @ @ @ @ @ @ @"
+  ". . . . . . . . . @ @ @ @ @ @ ."
+  "@ @ @ @ . . . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ . . . @ @ @ @ . ."
+  ". . @ @ @ @ . . . . . @ @ @ @ ."
+  ". @ @ @ @ @ . . . . . @ @ @ @ ."
+  ". . @ @ @ @ @ . . . . @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . @ @ @ . . @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ . . . . . . @ @ @ @ ."
+  ". @ @ @ @ . . . . . . @ @ @ @ ."
+  ". . @ @ @ . . . . . . @ @ @ @ ."
+  ". . @ @ @ @ . . . . @ @ @ @ . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ . . @ @ @ @ . . ."
+  ". . @ @ @ @ @ . . @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ . ."
+  ". . @ @ @ @ @ . . @ @ @ @ @ . ."
+  ". . @ @ @ @ @ . . @ @ @ @ . . ."
+  ". . . @ @ @ @ . . @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[0].push_back(matrix);
+to_char(
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ . @ @ @ @ . . . ."
+  ". . . @ @ @ @ . @ @ @ @ @ . . ."
+  ". . . @ @ . . . @ @ @ @ @ . . ."
+  ". @ @ @ . . . . @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ @"
+  , &matrix);
+num_map_[4].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ . . @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ . . @ @ . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  ". @ @ @ @ . . . . . . @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+
+to_char(
+  ". . . . . . . . . @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ . @ @ @ . . . ."
+  ". . . @ @ @ @ . . @ @ @ . . . ."
+  ". . . @ @ @ . . . @ @ @ . . . ."
+  ". . @ @ @ . . . . @ @ @ . . . ."
+  "@ @ @ @ . . . . . @ @ @ . . . ."
+  "@ @ @ @ . . @ . . @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . . @ @ @ . . . ."
+  ". . . . . . . . . @ @ @ . . . ."
+  ". . . . . . . . . @ @ @ . . . ."
+  ". . . . . . . . . @ @ @ . . . ."
+  ". . . . . . . . . @ @ @ . . . ."
+  , &matrix);
+num_map_[4].push_back(matrix);
+to_char(
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . @ @ @ @ @ . . @ @ @ @ . . ."
+  ". @ @ @ @ . . . . . . @ @ @ . ."
+  ". @ @ @ . . . . . . . @ @ @ @ ."
+  "@ @ @ @ @ . . . . . . @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ . @ @ @ @ @ @ @ . ."
+  "@ @ @ @ . . . . . . @ @ @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ . . . . . . . . . . @ @ @ ."
+  ". @ . . . . . . . . . . . @ . ."
+  ". . . . . . . . . . . . @ . . ."
+  ". . . . . . . . . . @ @ . . . ."
+  ". . . . . . . . . @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ . . . . ."
+  ". . . . . . @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . @ @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ @ . . . . . ."
+  ". . @ @ @ @ @ @ @ @ . . . . . ."
+  ". . @ @ @ @ @ @ @ @ . . . . . ."
+  ". . @ @ @ @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  , &matrix);
+num_map_[7].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ . . . . @ @ @ . . ."
+  "@ @ @ @ @ @ . . . . @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ . . . . @ @ @ @ @ @ @ ."
+  "@ @ @ @ . . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[0].push_back(matrix);
+to_char(
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . @ @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ @ @ . . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . . . . . . @ @ @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  "@ @ . . . . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ . . . . . ."
+  , &matrix);
+num_map_[3].push_back(matrix);
+to_char(
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ . . . @ @ @ @ @ . ."
+  ". @ @ @ @ . . . . . @ @ @ @ . ."
+  ". @ @ @ @ @ . . . @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ . . . . . . . @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ . . . @ @ @ @ . . ."
+  ". . @ @ @ @ . . . @ @ @ @ . . ."
+  ". . @ @ @ @ . . . @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ . . . @ @ @ @ @ ."
+  ". . @ @ @ @ . . . . . @ @ @ @ @"
+  ". @ @ @ @ @ . @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . . @ @ @ @ @"
+  ". @ @ @ @ @ . . . . . @ @ @ @ @"
+  ". @ @ @ @ . . . . . . . @ @ @ @"
+  ". @ @ @ @ @ . . . . . @ @ @ @ @"
+  ". . @ @ @ @ @ . . . @ @ @ @ @ @"
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . @ @ @ @ @ @ @ @ @ @ . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ . . . . . . . . . . ."
+  ". @ @ @ @ @ . . . . . . . . . ."
+  ". @ @ @ @ @ . . . . . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  "@ @ @ . . . . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ . @ @ @ @ @ . . . ."
+  "@ @ @ @ @ . . @ @ @ @ @ . . . @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ @ . ."
+  , &matrix);
+num_map_[4].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . @ @ @ @ @ @ @ @ . @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . . @ @ @ @ @ @ @"
+  ". . . . . . . . @ @ @ @ @ @ @ ."
+  ". . . . . . @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ @ . . . . . ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+to_char(
+  ". . . . . . . @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . @ @ @ @ @ . . . . . . . ."
+  ". . @ @ @ @ @ . . . . . . . . ."
+  ". . @ @ @ @ . . . . . . . . . ."
+  "@ @ @ @ @ @ . . . . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . . . @ @ @ @ @ @"
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ . . . . . . . . @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  ". @ @ @ @ @ . . . . @ @ @ @ @ @"
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . @ @ @ @ @ @ @ . . . . . ."
+  ". @ @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ @ . . . . @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . . . @ @ @ @ @ ."
+  ". . . . . . . . . . @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ @ @ . . . . ."
+  ". . @ @ @ @ @ . . . . . . . . ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+
+to_char(
+  ". . . . . . . . @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . @ @ @ @ @ @ @ @ . . . . ."
+  ". . @ @ @ @ . @ @ @ @ . . . . ."
+  ". @ @ @ @ . . @ @ @ @ . . @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . . @ @ @ @ . . . . ."
+  ". . . . . . . @ @ @ @ . . . . ."
+  ". . . . . . . @ @ @ @ . . . . @"
+  ". . . . . . @ @ @ @ @ @ . . . @"
+  ". . . . @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[4].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ . . . @ @ @ @ @ . ."
+  ". . . @ @ . . . . . @ @ @ @ . ."
+  ". . . . . . . . . . @ @ @ @ . ."
+  ". . . . . . @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . . . . @ @ @ @ @ @ ."
+  ". . @ @ . . . . . . @ @ @ @ @ @"
+  ". @ @ @ . . . . . . . @ @ @ @ @"
+  ". @ @ @ @ . . . . . . @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  "@ @ @ @ @ @ @ . . @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[3].push_back(matrix);
+
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ . . . . . ."
+  ". . @ @ . . . . . . . . . . . ."
+  ". @ @ @ . . . . . . . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ . . . @ @ @ @ . . ."
+  "@ @ @ @ . . . . . @ @ @ @ @ @ ."
+  ". . . . . . . . . . @ @ @ @ @ @"
+  "@ @ @ @ . . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ . . . . . @ @ @ @ @ . ."
+  "@ @ @ @ . . . . . @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ . . @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  "@ @ @ . . . . . . . . . . @ @ @"
+  "@ @ @ . . . . . . . . . . @ @ @"
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . @ . . @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . @ @ @ @ @ . . . . . . ."
+  ". . . @ @ @ @ . . . . . . . . ."
+  ". . . @ @ @ @ . . . . . . . . ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ . . . . . . @ @ @ @ ."
+  "@ @ @ @ . . . . . . . . @ @ @ ."
+  ". @ @ @ . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . @ @ @ @ . . . . . ."
+  ". . . . . . @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  ". . . @ @ @ @ . . . . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . . @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . . . @ @ @ @ . ."
+  "@ @ @ @ @ . . . . @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ . . . . . . @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+to_char(
+  "@ @ @ @ @ @ @ . . @ @ @ @ @ . ."
+  ". @ @ @ @ @ . . . @ @ @ . . . ."
+  ". @ @ @ @ . . . . @ @ @ . . . ."
+  "@ @ @ @ @ . . . @ @ @ @ . . . ."
+  "@ @ @ @ . . . . @ @ @ @ . . . ."
+  "@ @ @ . . . . . @ @ @ @ . . . ."
+  "@ @ @ . . . . . @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ . . . . . @ @ @ @ @ . . @ ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ @ @ @ . ."
+  , &matrix);
+num_map_[4].push_back(matrix);
+to_char(
+  ". . . . @ . @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ . @ . . . ."
+  ". . @ @ @ @ @ @ @ . . . . . . ."
+  ". . @ @ @ @ @ @ . . . . . . . ."
+  ". @ @ @ @ @ @ . . . . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . @ @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ . . . @ @ @ @ @ @ @ ."
+  ". @ @ @ @ . . . @ @ @ @ @ @ . ."
+  ". @ @ @ @ . @ . @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . @ @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". . . @ @ @ . @ @ @ @ @ . . . ."
+  ". . @ @ @ @ . . @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ . . @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ . @ @ @ @ @ @ @ @"
+  ". . @ @ @ @ . . . @ @ @ @ @ @ ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . @ @ @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ @ @ . ."
+  ". . . @ . . . . @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ . . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ . @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ . @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[3].push_back(matrix);
+to_char(
+  ". . . . . . . . @ @ @ @ @ @ @ @"
+  ". . . . . . . @ @ @ @ @ @ @ . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  ". @ @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ . . . . ."
+  "@ @ @ @ @ . . @ @ @ @ @ @ . . ."
+  "@ @ @ @ . . . . @ @ @ @ @ @ . ."
+  "@ @ @ @ . . . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . @"
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  "@ . . @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ . . . . . ."
+  ". . . . @ @ @ @ @ . . . . . . ."
+  ". . . @ @ @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . @ @ @ @ @ @ @ @"
+  ". . . . . . . @ @ @ @ @ @ @ @ ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ . . . . . . ."
+  , &matrix);
+num_map_[3].push_back(matrix);
+to_char(
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . . . . . . . . . . . ."
+  ". . . . . . . . . . . . . @ . ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . @ @ @ @ . . @ @ @ @ @ @ @ ."
+  ". . . . . . . @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". . . . . . @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ . @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  , &matrix);
+num_map_[4].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ . . . . . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . . . . @ @ @ @ @ @ @"
+  ". @ @ @ @ . . . . @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ . . . . . . . . . @ @ @ ."
+  "@ @ @ . . . . . . . . . @ @ @ ."
+  "@ @ @ . . . . . . . . @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . . @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ @ ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+to_char(
+  ". . . . . . . . . . . . . . . ."
+  ". . . . . @ . . . . @ . . . . ."
+  ". . . @ @ @ . . . . @ @ . . . ."
+  ". . @ @ @ @ . . . . @ @ @ . . ."
+  ". . @ @ @ @ . . . . @ @ @ @ . ."
+  ". . @ @ @ @ . . . . @ @ @ @ . ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  ". . @ @ @ @ . . . . @ @ @ @ . ."
+  ". . @ @ @ @ . . . . @ @ @ . . ."
+  ". . . @ @ @ . . . . @ @ @ . . ."
+  ". . . . @ @ . . . @ @ @ . . . ."
+  ". . . . . . . . . . . . . . . ."
+  ". . . . . . . . . . . . . . . ."
+  , &matrix);
+num_map_[0].push_back(matrix);
+to_char(
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . . @ @ @ @ @ @ @ @"
+  ". . . . . . @ @ @ @ @ @ @ @ @ @"
+  ". . . . . @ @ @ @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ @ . @ @ @ @ @ @"
+  ". . @ @ @ @ @ . . . @ @ @ @ @ ."
+  ". @ @ @ @ . . . . @ @ @ @ @ . ."
+  ". . @ . . . . . . @ @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ . . . . ."
+  ". . . . . . . @ @ @ . . . . . ."
+  , &matrix);
+num_map_[1].push_back(matrix);
+to_char(
+  ". . . . . . . . . . . . . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ . . . @ @ @ @ . . ."
+  ". . @ @ @ . . . . . @ @ @ @ . ."
+  ". . @ @ @ . . . . . @ @ @ @ . ."
+  ". . @ @ @ @ . . . @ @ @ @ . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ . . . . @ @ @ @ . ."
+  ". @ @ @ @ . . . . . @ @ @ @ . ."
+  ". @ @ @ @ . . . . . . @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ . ."
+  ". . @ @ @ @ @ . @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . . . . . . . . . . . . . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". . . . . . . . . . . . @ . . ."
+  ". . . . . . . . . . . . @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ . . @ @ @ @ . . ."
+  ". . @ @ @ @ . . . . . . . . . ."
+  ". . . @ @ @ . . . . . . . . . ."
+  ". . . @ @ @ . . . . . . . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . @ @ . . . . . @ @ @ @ @ ."
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . @ @ @ @ @ . . . @ @ @ @ @"
+  ". @ @ @ @ @ @ @ . . . @ @ @ @ ."
+  "@ @ @ @ @ @ @ . . . . @ @ @ @ ."
+  ". @ @ @ @ @ . . . . . @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ . ."
+  ". . . . @ @ . . . @ @ . . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". . . . @ @ . . . . . @ . . . ."
+  ". . @ @ @ @ . . . . . @ @ @ . ."
+  ". @ @ @ @ . . . . @ @ @ @ @ @ ."
+  ". @ @ @ . . . . @ @ @ @ @ @ @ ."
+  "@ @ @ @ . . . . @ @ @ @ @ @ . ."
+  "@ @ @ @ . . . . . . . . . . . ."
+  "@ @ @ . . . . @ @ . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ . . . . . . @ @ @ . . ."
+  ". @ @ . . . . . . . . @ @ . . ."
+  ". @ @ . . . . . . . . . @ @ . ."
+  ". @ @ @ @ . . . . . . @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . . . @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". . @ @ @ @ @ @ @ @ . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ . . . . @ @ @ @ @ . ."
+  ". @ @ . . . . . . . . . @ @ . ."
+  ". @ @ . . . . . . . . . @ @ @ ."
+  ". @ @ @ . . . . . . . . @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . . . @ @ @ . . . . @ @ @ @"
+  ". . . . . . . . . . . . @ @ @ @"
+  ". @ @ @ @ @ @ . . . . . @ @ @ ."
+  "@ @ @ @ @ @ @ . . . . @ @ @ @ ."
+  "@ @ @ @ @ @ @ . . . . @ @ @ @ ."
+  "@ @ @ @ . . . . . . @ @ @ @ . ."
+  ". @ @ @ . . . . @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ . . . . . ."
+  , &matrix);
+num_map_[9].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ . . . . . . . . . . ."
+  "@ @ @ @ . . . . . . . . . . . ."
+  "@ @ @ @ . . . . . . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ @"
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ @ . . . . . . . @ @ @ @ @"
+  "@ @ @ @ @ . . . . . . @ @ @ @ @"
+  ". @ @ @ @ . . . . . . @ @ @ @ @"
+  ". @ @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ @ @ @ @ @ @ . . . . ."
+  ". @ @ @ @ @ @ . . . . . . . . ."
+  "@ @ @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". . @ @ @ @ . . . @ @ @ . . . ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ . ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  ". @ @ @ . . . . . @ @ @ @ @ @ ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  ". . @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ . . . . . . . . . ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ . . @ @ @ @ @ @ @ ."
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". . @ @ @ . . . . . @ @ @ . . ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . . @ @ @ . ."
+  "@ @ @ @ @ . . . . . . . . . . ."
+  "@ @ @ @ @ . . . . . . . . . . ."
+  "@ @ @ @ @ @ . . . @ @ @ @ @ . ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  "@ @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ . ."
+  ". . . . @ @ . . . @ @ . . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". . . @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . @ @ @ @ @ @ @ @ . . . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ . . @ @ @ @ @ @ ."
+  ". . @ @ @ . . . . . @ @ @ @ @ ."
+  ". . . . . . . . . . @ @ @ @ @ ."
+  ". . . . . . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ . . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ . . . . @ @ @ @ @ ."
+  ". @ @ @ @ @ @ . . @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ . . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ @ @ @ @ @ @ @ @ . . ."
+  ". @ @ @ @ . . . . . @ @ @ @ . ."
+  "@ @ @ @ . . . . . . . . @ @ @ ."
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  ". @ @ @ . . . . . . . . @ @ @ ."
+  ". . @ @ @ @ . . . . . @ @ @ . ."
+  ". . . @ @ @ @ . . . @ @ @ @ . ."
+  ". . . . @ @ . . @ @ @ @ @ . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". @ . . . . . . . . . . . @ . ."
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . @ @ @ @ @ @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ . . . . @ @ . . ."
+  ". . @ @ @ @ . . . @ @ @ . . . ."
+  ". . . @ @ @ . . @ @ @ . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  ". . . . @ @ @ @ . . . . . . . ."
+  ". . . . @ @ @ @ . . . . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  ". . @ @ . . @ @ @ . . . . . . ."
+  ". @ @ . . . @ @ @ . . . . . . ."
+  "@ @ @ . . . @ @ @ . . . . . @ @"
+  "@ @ @ @ @ @ @ . . . . . . @ @ @"
+  "@ @ @ @ @ @ . . . . . . @ @ @ @"
+  ". . . . . . . . . . . @ @ @ @ ."
+  ". . . . . . . . . . . @ @ @ . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". . . . . . . . . . @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ @ @ . ."
+  ". . . . . @ @ @ @ @ @ @ @ . . ."
+  ". . . @ @ @ @ @ . @ @ @ . . . ."
+  ". . . @ @ . . . @ @ @ . . . . ."
+  ". . . . . . . @ @ @ . . . . . ."
+  ". . . . . @ @ @ . . . . . . . ."
+  ". . . . @ @ @ . . . . . . . . ."
+  ". . . @ @ . . . . . . . . . . ."
+  ". @ @ @ . . . . . . . . . . . ."
+  "@ @ @ . . . . . . . . . . . . ."
+  "@ @ @ . . . . . . . . . . . . ."
+  "@ @ @ @ @ @ . . . . . @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ . . @ @ @ @ @ @"
+  ". . @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  ". . . . . . @ @ @ @ @ @ @ . . ."
+  , &matrix);
+num_map_[2].push_back(matrix);
+to_char(
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  ". . @ @ @ . @ @ . . . @ @ @ . ."
+  ". @ @ . . @ @ . . . . . @ @ . ."
+  ". @ @ . . @ @ . . . . . . @ @ ."
+  ". @ @ . . . @ @ . . . . . @ . ."
+  ". . @ @ . . . @ @ . . @ @ . . ."
+  ". . . @ @ . . . @ @ @ @ . . . ."
+  ". . . @ @ @ . . . . @ @ @ . . ."
+  ". . @ @ @ @ @ @ . . . . @ @ . ."
+  ". @ @ . . . . @ @ @ . . . @ @ ."
+  "@ @ . . . . . . . @ @ . . . @ @"
+  "@ @ . . . . . . . . @ . . . @ @"
+  "@ @ . . . . . . . . @ . . . @ @"
+  ". @ @ . . . . . . . @ . . @ @ ."
+  ". . @ @ @ @ . . @ @ @ @ @ @ . ."
+  ". . . . @ @ @ @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[8].push_back(matrix);
+to_char(
+  ". @ @ @ @ @ @ @ @ @ @ @ @ @ @ @"
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ . ."
+  "@ @ @ . . . . . . @ @ @ @ @ . ."
+  "@ . . . . . . . . @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . . @ @ @ @ @ . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . @ @ @ @ @ . . . . . . ."
+  ". . . . @ @ @ @ @ . . . . . . ."
+  , &matrix);
+num_map_[7].push_back(matrix);
+to_char(
+  ". . . . . . . . @ @ @ @ @ . . ."
+  ". . . . @ @ @ @ . . . @ @ @ . ."
+  ". . . @ @ @ @ @ . . . . @ . . ."
+  ". @ @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ . . ."
+  "@ @ @ @ @ @ @ @ @ @ @ @ @ @ @ ."
+  "@ @ @ @ @ @ @ @ . . . . . @ @ @"
+  "@ @ @ @ @ @ @ @ . . . . . @ @ @"
+  "@ @ @ @ @ @ @ @ . . . . . @ @ @"
+  "@ @ @ @ @ @ @ @ . . . . . @ @ @"
+  "@ @ @ @ @ @ @ @ . . . . . @ @ @"
+  ". @ @ @ @ @ @ @ . . . . @ @ @ ."
+  ". . . @ @ @ @ @ . . . @ @ @ . ."
+  ". . . . . @ @ @ . @ @ @ @ . . ."
+  ". . . . . . . @ @ @ @ @ . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+to_char(
+  ". . . . @ @ @ . . . . . . . . ."
+  ". . . @ @ . . . . . . . . . . ."
+  ". . . @ @ @ @ . . . . . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  ". . @ @ @ . . . @ @ @ @ @ . . ."
+  ". . . . . . . . @ @ @ @ @ @ . ."
+  ". . . . . . . . @ @ @ @ @ @ @ @"
+  "@ @ @ . . . . . @ @ @ @ @ @ @ @"
+  "@ @ @ . . . . . @ @ @ @ @ @ @ @"
+  "@ @ . . . . . . @ @ @ @ @ @ @ @"
+  "@ @ . . . . . . @ @ @ @ @ @ @ @"
+  "@ @ @ . . . . . @ @ @ @ @ @ @ @"
+  "@ @ @ . . . . . @ @ @ @ @ @ @ ."
+  ". @ @ @ . . . . @ @ @ @ @ @ . ."
+  ". . @ @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ . . . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+to_char(
+  ". . . . . . @ @ @ @ @ @ @ . . ."
+  ". . . . . @ @ @ @ @ @ @ @ @ . ."
+  ". . . . @ @ @ . . . . @ @ @ @ ."
+  ". . . @ @ @ . . . . . . @ @ @ @"
+  ". . @ @ @ . . . . . . . . @ @ @"
+  ". @ @ @ . . . . . . . . . @ @ @"
+  ". @ @ @ . . . . . . . . . @ @ @"
+  "@ @ @ . . . . . . . . . . @ @ @"
+  "@ @ @ . . . . . . . . . @ @ @ @"
+  "@ @ . . . . . . . . . . @ @ @ ."
+  "@ @ . . . . . . . . @ @ @ @ . ."
+  "@ @ . . . . . . . @ @ @ @ . . ."
+  "@ @ @ . . . . . @ @ @ @ . . . ."
+  "@ @ @ @ . @ @ @ @ @ @ . . . . ."
+  ". @ @ @ @ @ @ @ @ @ . . . . . ."
+  ". . @ @ @ @ @ . . . . . . . . ."
+  , &matrix);
+num_map_[0].push_back(matrix);
+to_char(
+  ". . . . . . . . . . @ @ @ @ @ @"
+  ". . . . . . . @ @ @ @ . . @ . ."
+  ". . . . . @ @ @ @ @ . . . . . ."
+  ". . . . @ @ @ @ @ . . . . . . ."
+  ". . . @ @ @ @ @ . . . . . . . ."
+  ". . @ @ @ @ @ @ @ @ @ . . . . ."
+  ". . @ @ @ @ . . . @ @ @ @ . . ."
+  ". @ @ @ @ . . . . . @ @ @ @ . ."
+  "@ @ @ @ . . . . . . @ @ @ @ . ."
+  "@ @ @ @ . . . . . . @ @ @ @ . ."
+  "@ @ @ . . . . . . . @ @ @ @ . ."
+  "@ @ @ . . . . . . @ @ @ @ . . ."
+  "@ @ @ . . . . . @ @ @ @ . . . ."
+  "@ @ @ . . . . @ @ @ @ . . . . ."
+  ". . @ @ @ . @ @ @ @ . . . . . ."
+  ". . . @ @ @ @ @ @ . . . . . . ."
+  , &matrix);
+num_map_[6].push_back(matrix);
+
+to_char(
+  ". . . . . . . @ @ @ @ @ @ @ @ @"
+  ". . . . @ @ @ @ @ @ @ @ @ @ @ @"
+  ". . . @ @ @ @ @ . . . . . . . ."
+  ". . . @ @ @ @ @ . . . . . . . ."
+  ". . . @ @ @ @ . . . . . . . . ."
+  ". . . @ @ @ @ @ . . . . . . . ."
+  ". . . @ @ @ @ @ @ @ @ @ . . . ."
+  ". . . . @ @ @ @ @ @ @ @ @ @ . ."
+  ". . . . . . . @ @ @ @ @ @ @ @ ."
+  ". . . . . . . . . @ @ @ @ @ @ ."
+  ". . . . . . . . . @ @ @ @ @ . ."
+  ". . . . . . . . . @ @ @ @ @ . ."
+  "@ . . . . . . . @ @ @ @ . . . ."
+  "@ @ @ @ @ @ @ @ @ @ . . . . . ."
+  "@ @ @ @ @ @ @ @ . . . . . . . ."
+  "@ @ @ @ @ @ @ . . . . . . . . ."
+  , &matrix);
+num_map_[5].push_back(matrix);
+
+
+  }
+
+  public:
+
+  Recognizer(/* const char *filename */) {
+    //freopen("245", "r", stdin);
+    filename_ = "";
+    //filename_ = filename;
+    while (!cin.eof()) {
+      string str;
+      getline(cin, str);
+      if (str.length() > 0) {
+        image_.push_back(vector<char>());
+        for (int i = 0; i < str.length(); ++i) {
+          if (str[i] == '.' || str[i] == '%' || str[i] == '#' || str[i] == '@') {
+            image_.back().push_back(str[i]);
+          }
+        }
+      }
+    }
+    fill_num_map();
+  }
+
+  int number_define() {
+    int top, bottom, left, right;    
+    edges_det(0, image_.size() - 1, 0, image_.front().size() - 1, &top, &bottom, &left, &right);
+    align(top, bottom, left, right);
+    edges_det(0, image_.size() - 1, 0, image_.front().size() - 1, &top, &bottom, &left, &right);
+    vector<int> numbers(3);
+ //   vector<double> number_weights(3);
+    vector<vector<double> > number_weights(3);
+    for (int d_count = 1; d_count <= 3; ++d_count) {
+      if (!digit_det(d_count, top, bottom, left, right)) {
+        number_weights[d_count - 1] = vector<double>(d_count, -1);
+      } else {      
+        number_weights[d_count - 1] = get_number_weight(d_count, &numbers[d_count - 1]);
+      }
+    }
+    double max_weight = 0;
+    int number;
+    vector<double> min;
+    for (int i = 0; i < number_weights.size(); ++i) {
+      double c_min = 1000;
+      for (int j = 0; j < number_weights[i].size(); ++j) {
+        if (c_min > number_weights[i][j]) {
+          c_min = number_weights[i][j];
+        }
+      }
+      min.push_back(c_min);
+      c_min = 1000;
+      //cout << endl;
+    }
+    double max_v = 0;
+    double max_ind;
+    for (int i = 0; i < min.size(); ++i) {
+      if (min[i] > max_v) {
+        max_v = min[i];
+        max_ind = i;
+      }
+    }
+    number = numbers[max_ind];
+    return number;
+  }
+
+};
+
+int main(int argc, char* argv[]) {
+  Recognizer *recognizer = new Recognizer(/*argv[1]*/);
+  int number = recognizer->number_define();
+  cout << number << endl;
+  delete recognizer;
+  return 0;
+}

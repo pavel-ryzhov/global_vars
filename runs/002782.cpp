@@ -1,0 +1,170 @@
+//============================================================================
+// Name        : problem3.cpp
+// Author      : Toporkov P.
+// Version     :
+// Copyright   :
+// Description : Problem3 Solution
+//============================================================================
+
+#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <string>
+#include <map>
+
+using namespace std;
+// Global variables
+const string keyboard[]={"0",".,?","abc","def","ghi","jkl","mno","pqrs","tuv","wxyz"};
+
+// Classes
+class word {
+public:
+	word(string _name, unsigned int _freq);
+	string GenerateKey();
+	unsigned int GetFreq(){return this->freq;}
+	string GetName(){return this->name;}
+	void IncFreq(){this->freq++;}
+private:
+	string name;
+	unsigned int freq;
+};
+word::word(string _name, unsigned int _freq)
+{
+	this->name = _name;
+	this->freq = _freq;
+}
+string word::GenerateKey()
+{
+	string key;
+
+	for (unsigned  int i=0; i < this->name.length(); i++){
+		for (unsigned int j = 0; j < 10; j++) {
+			if (keyboard[j].find_first_of(this->name[i],0) != string::npos)
+			{
+				//key *= 10; //Appending value to key
+				key += (j+'0');
+			}
+		}
+	}
+	return key;
+}
+map < string, vector <word> > dict;
+
+// Functions
+bool FreqComp(word w1, word w2)	// Word frequency comaprator
+{
+	return w1.GetFreq() > w2.GetFreq();
+}
+string translate(string key, unsigned int shift) // Translating key to word
+{
+	string out;
+
+	if (key == "1")
+		return keyboard[1].substr(shift%3,1);
+	//shift %= dict[key].size(); //For cycling
+	out = dict[key][shift].GetName();
+	dict[key][shift].IncFreq(); // Frequency increasing
+	vector <word>::iterator p;
+	for (p = dict[key].begin(); p != dict[key].end(); p++) // Reposition
+	{
+		if (dict[key][shift].GetFreq() >= p->GetFreq())
+		{
+			dict[key].insert(p,dict[key][shift]);
+			dict[key].erase(dict[key].begin()+shift+1); // TODO: Correct >____<
+			return out;
+		}
+	}
+}
+string parse(string data) // Parsing input string
+{
+	string out;
+	string current_key;
+	unsigned int shift = 0;
+	for (unsigned long int i=0;i<data.length()+1;i++)
+	{
+		switch (data[i])
+		{
+		case '*':
+			shift++;
+			break;
+		case '\0':
+			if (!current_key.empty()){
+				out += translate(current_key,shift);
+				shift = 0;
+				current_key.clear();
+			}
+			return out;
+			break;
+		case ' ':
+			if (!current_key.empty()){
+				out += translate(current_key,shift);
+				shift = 0;
+				current_key.clear();
+			}
+			out += ' ';
+			break;
+		case '1':
+			if (!current_key.empty()){
+				out += translate(current_key,shift);
+				shift = 0;
+				current_key.clear();
+			}
+			current_key = "1";
+			break;
+		default:
+			if (current_key=="1"){
+				out += translate(current_key,shift);
+				shift = 0;
+				current_key.clear();
+			}
+
+			current_key += data[i];
+			break;
+		}
+	}
+}
+
+int main(int argc, char **argv) {
+	unsigned int n;
+	cin >> n;
+	if (n>50000)
+	{
+		cerr << "Error. Too large file";
+		return -1;
+	}
+	for (unsigned int i = 0; i < n; i++)
+	{
+		vector <word>::iterator it;
+		string buf;
+		unsigned int freqbuf;
+		cin >> buf >> freqbuf;
+
+		word my_word(buf,freqbuf);
+		it=dict[my_word.GenerateKey()].begin();
+		if (dict[my_word.GenerateKey()].size()){
+
+			while (it!=dict[my_word.GenerateKey()].end() && it->GetFreq()>=freqbuf)
+				it++;
+
+			dict[my_word.GenerateKey()].insert(it,my_word);
+		}
+
+		else dict[my_word.GenerateKey()].push_back(my_word);
+	}
+
+	//Sort();
+	//Print();
+	string text;
+
+	cin.ignore();
+
+	getline(cin,text,'\n');
+
+	//for (unsigned long int i=0;i<text.length()+1;i++)
+	cout << parse(text);
+
+
+	return 0;
+}
+
+

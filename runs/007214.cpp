@@ -1,0 +1,61 @@
+#include <vector>
+#include <stdio.h>
+using namespace std;
+
+struct LINK
+{
+	int length;
+	int n;
+};
+
+struct ZVENO
+{
+	int n; //номер звена
+	vector<LINK> links; //ссылки в нем
+};
+
+ZVENO *tree;
+
+long findL(int start, int end, int last);
+
+int main()
+{
+	int N, s,e,l;
+	scanf ("%d",&N);
+	LINK temp;
+	tree = new ZVENO [N];
+	for (int i = 0; i<N-1; i++)
+	{
+		scanf ("%d%d%d",&s,&e,&l);
+		temp.length = l;
+		temp.n = e-1;
+		tree[s-1].links.push_back(temp);
+		temp.n = s-1;
+		tree[e-1].links.push_back(temp);
+	}
+	scanf ("%d",&N);
+	for (int i = 0; i<N; i++)
+	{
+		int s,e;
+		scanf ("%d%d",&s,&e);
+		printf("%ld\n",findL(s-1,e-1,-1));
+	}
+	return 0;
+}
+
+long findL(int start, int end, int last)
+{
+	if (start==end) return 0;
+	for (int i = 0; i < tree[start].links.size(); i++)
+	{
+		if (tree[start].links[i].n != last)
+		{
+			long len = findL(tree[start].links[i].n, end, start);
+			if (len != -1) 
+			{
+				return len + (long)tree[start].links[i].length;
+			}
+		}
+	}
+	return -1;
+}

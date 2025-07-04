@@ -1,0 +1,140 @@
+#include <fstream>
+#include <vector>
+
+using namespace std;
+
+typedef vector< vector<int> > graph;
+typedef vector<int>::const_iterator graph_iterator;
+
+vector<int> node_height, DFS_list, first, segment_tree;
+vector<bool> DFS_used;
+
+unsigned short nodes_quantity;
+vector< vector<int> > path;
+graph tree;
+vector<int> previous;
+
+void buildTree(unsigned short node_index = 0);
+void DFS(unsigned short node_index, unsigned short height);
+void prepare();
+void buildSegmentTree(unsigned long i, unsigned short left, unsigned short right);
+unsigned short findLCA(unsigned short a, unsigned short b);
+unsigned short segmentTreeMin(unsigned long i, unsigned short node_left, unsigned short node_right, unsigned short left, unsigned short right);
+
+int main()
+{
+    unsigned short start, end, length, node_pairs_quantity, lca_node, pair[2];
+    unsigned long total_length;
+
+    scanf("%hu", &nodes_quantity);
+    tree.resize(nodes_quantity);
+    path.resize(nodes_quantity);
+    previous.assign(nodes_quantity, -1);
+    for (unsigned short i = 0; i < nodes_quantity; i++)
+        path[i].assign(nodes_quantity, -1);
+    for (unsigned short i = 0; i < nodes_quantity - 1; i++)
+    {
+        scanf("%hu %hu %hu", &start, &end, &length);
+        path[start - 1][end - 1] = length;
+        path[end - 1][start - 1] = length;
+    }
+    buildTree();
+    prepare();
+    scanf("%hu", &node_pairs_quantity);
+    for (unsigned short i = 0; i < node_pairs_quantity; i++)
+    {
+        scanf("%hu %hu", &pair[0], &pair[1]);
+        lca_node = findLCA(--pair[0], --pair[1]);
+        total_length = 0;
+        for (unsigned short j = 0; j <= 1; j++)
+            while (pair[j] != lca_node)
+            {
+                total_length += path[pair[j]][previous[pair[j]]];
+                pair[j] = previous[pair[j]];
+            }
+        printf("%lu\n", total_length);
+    }
+}
+
+void buildTree(unsigned short node_index)
+{
+    for (unsigned short i = 0; i < nodes_quantity; i++)
+        if (path[node_index][i] != -1 && previous[node_index] != i)
+        {
+            tree[node_index].push_back(i);
+            previous[i] = node_index;
+            buildTree(i);
+        }
+}
+
+void DFS(unsigned short node_index, unsigned short height = 1)
+{
+    DFS_used[node_index] = true;
+    node_height[node_index] = height;
+    DFS_list.push_back(node_index);
+    for (graph_iterator i = tree[node_index].begin(); i != tree[node_index].end(); i++)
+        if (!DFS_used[*i])
+        {
+            DFS(*i, height + 1);
+            DFS_list.push_back(node_index);
+        }
+}
+
+void prepare()
+{
+    unsigned short nodes_quantity = tree.size(), node;
+    unsigned long DFS_list_size;
+
+    node_height.resize(nodes_quantity);
+    DFS_list.reserve(nodes_quantity * 2);
+    DFS_used.assign(nodes_quantity, false);
+    DFS(0);
+    DFS_list_size = DFS_list.size();
+    segment_tree.assign(DFS_list_size * 4 + 1, -1);
+    buildSegmentTree(1, 0, DFS_list_size - 1);
+    first.assign(nodes_quantity, -1);
+    for (unsigned long i = 0; i < DFS_list_size; i++)
+    {
+        node = DFS_list[i];
+        if (first[node] == -1)
+            first[node] = i;
+    }
+}
+
+void buildSegmentTree(unsigned long i, unsigned short left, unsigned short right)
+{
+    if (left == right)
+        segment_tree[i] = DFS_list[left];
+    else
+    {
+        int mid = (left + right) >> 1;
+        buildSegmentTree(i + i, left, mid);
+        buildSegmentTree(i + i + 1, mid + 1, right);
+        if (node_height[segment_tree[i + i]] < node_height[segment_tree[i + i + 1]])
+            segment_tree[i] = segment_tree[i + i];
+        else
+            segment_tree[i] = segment_tree[i + i + 1];
+    }
+}
+
+unsigned short findLCA(unsigned short a, unsigned short b)
+{
+    int left = first[a], right = first[b];
+    if (left > right)
+        swap(left, right);
+    return segmentTreeMin(1, 0, DFS_list.size() - 1, left, right);
+}
+
+unsigned short segmentTreeMin(unsigned long i, unsigned short node_left, unsigned short node_right, unsigned short left, unsigned short right)
+{
+    if (node_left == left && node_right == right)
+        return segment_tree[i];
+    int mid = (node_left + node_right) >> 1;
+    if (right <= mid)
+        return segmentTreeMin(i + i, node_left, mid, left, right);
+    if (left > mid)
+        return segmentTreeMin(i + i + 1, mid + 1, node_right, left, right);
+    int ans1 = segmentTreeMin(i + i, node_left, mid, left, mid);
+    int ans2 = segmentTreeMin(i + i + 1, mid + 1, node_right, mid + 1, right);
+    return node_height[ans1] < node_height[ans2] ? ans1 : ans2;
+}

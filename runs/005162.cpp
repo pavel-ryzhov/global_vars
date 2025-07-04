@@ -1,0 +1,224 @@
+#include <iostream>
+#include <string>
+#include <map>
+
+using namespace std;
+
+struct word {
+  string lett;
+  int freq;
+};
+
+string numbWord(string word) {
+  string str;
+  int numb = 0;
+  for (int i = 0; i < word.size(); i++) {
+    numb = ((int)(word.at(i)) - 97)/3+50;
+    if (word.at(i) == 's') {
+      numb = numb-1;
+    }
+    if (word.at(i) == 'v') {
+      numb = numb-1;
+    }
+    if (word.at(i) > 'x') {
+      numb = numb-1;
+    }
+    str = str+(char)numb;
+  }
+  return str;
+}
+
+int main() {
+  multimap<string, word> map1;
+  pair<string, word> p;
+  multimap<string, word>::iterator map_iter = map1.begin();
+  int freqs;
+  int count = 0;
+  string words;
+  int N = 0;
+  bool flag = false;
+
+  word wordOne[3];
+  wordOne[0].lett = ".";
+  wordOne[0].freq = 1;
+  wordOne[1].lett = ",";
+  wordOne[1].freq = 1;
+  wordOne[2].lett = "?";
+  wordOne[2].freq = 1;
+  string one[3] = {"1", "1", "1"};
+  for (int i = 0; i < 3; i++) {
+    p.first = one[i];
+    p.second = wordOne[i];
+    map1.insert(p);
+  }
+  cin >> N;
+  word *currentWord;
+  currentWord = new word[N];
+  word coutWord;
+  word findWord;
+  string *str;
+  str = new string[N];
+  for (int i = 0; i < N; i++) {
+    cin >> words;
+    cin >> freqs;
+    currentWord[i].lett = words;
+    currentWord[i].freq = freqs;
+    str[i] = numbWord(words);
+    p.first = str[i];
+    p.second = currentWord[i];
+    count = map1.count(str[i]);
+    if (count != 0) {
+      map_iter = map1.find(str[i]);
+      for (int j = 0; j < count; j++) {
+        findWord = (*map_iter).second;
+        if (findWord.freq < freqs) {
+          map1.insert(map_iter, p);
+          flag = true;
+          break;
+          count = 0;
+        }
+        *map_iter++;
+      }
+      if (!flag) {
+        map1.insert(p);
+      }
+    } else {
+      map1.insert(p);
+    }
+    flag = false;
+  }
+  delete [] currentWord;
+  delete [] str;
+  count = 0;
+  string keys;
+  string key;
+  int change = 0;
+  char prevLetter = ' ';
+  char letter;
+  cin >> letter;
+  getline(cin, keys);
+  keys = letter+keys;
+  int size = keys.size();
+  for (int i = 0; i < size; i++) {
+    letter = keys.at(i);
+    if (letter <= '9' && letter > '1') {
+      if (prevLetter == '*' || prevLetter == '1') {
+        map_iter = map1.find(key);
+        for (int k = 0; k < change; k++) {
+          *map_iter++;
+        }
+        coutWord = (*map_iter).second;
+        cout << coutWord.lett;
+        key.clear();
+        change = 0;
+      }
+      key = key+letter;
+    } else if (letter == '*') {
+      change++;
+    } else if (letter == ' ') {
+      if (prevLetter == ' ') {
+        cout << " ";
+      } else {
+        map_iter = map1.find(key);
+        for (int k = 0; k < change; k++) {
+          if (map_iter == map1.end()) {
+            cout << "ERROR * !" << endl;
+            return 0;
+          }
+          *map_iter++;
+        }
+        coutWord = (*map_iter).second;
+        cout << coutWord.lett << " ";
+        if (key != "1") {
+          coutWord.freq = coutWord.freq+1;
+          map1.erase(map_iter);
+          p.first = key;
+          p.second = coutWord;
+          count = map1.count(key);
+          if (count != 0) {
+            map_iter = map1.find(key);
+            for (int j = 0; j < count; j++) {
+              findWord = (*map_iter).second;
+              if (findWord.freq <= coutWord.freq) {
+                map1.insert(map_iter, p);
+                flag = true;
+                break;
+                count = 0;
+              }
+              *map_iter++;
+            }
+            if (!flag) {
+              map1.insert(p);
+              count = 0;
+            }
+            flag = false;
+          } else {
+            map1.insert(p);
+          }
+        }
+        change = 0;
+        key.clear();
+      }
+    } else if (letter == '1') {
+      if (!key.empty()) {
+        map_iter = map1.find(key);
+        for (int k = 0; k < change; k++) {
+          if (map_iter == map1.end()) {
+            cout << "ERROR * !" << endl;
+            return 0;
+          }
+          *map_iter++;
+        }
+        coutWord = (*map_iter).second;
+        if (key != "1") {
+          coutWord.freq = coutWord.freq+1;
+          map1.erase(map_iter);
+          p.first = key;
+          p.second = coutWord;
+          count = map1.count(key);
+          if (count != 0) {
+            map_iter = map1.find(key);
+            for (int j = 0; j < count; j++) {
+              findWord = (*map_iter).second;
+              if (findWord.freq <= coutWord.freq) {
+                map1.insert(map_iter, p);
+                flag = true;
+                break;
+                count = 0;
+              }
+              *map_iter++;
+            }
+            if (!flag) {
+              map1.insert(p);
+              count = 0;
+            }
+            flag = false;
+          } else {
+            map1.insert(p);
+          }
+        }
+        cout << coutWord.lett;
+        change = 0;
+        key.clear();
+      }
+      change = 0;
+      key = "1";
+    }
+    prevLetter = letter;
+  }
+  if (letter == ' ') {
+    cout << " " << endl;
+  }
+  if (letter == '1') {
+    cout << "." << endl;
+  }
+  if (letter != ' ' && letter != '1') {
+    map_iter = map1.find(key);
+    for (int k = 0; k < change; k++) {
+      *map_iter++;
+    }
+    coutWord = (*map_iter).second;
+    cout << coutWord.lett << endl;
+  }
+  return 0;
+}

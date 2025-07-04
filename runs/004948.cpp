@@ -1,0 +1,183 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <map>
+#include <vector>
+#include <iostream>
+#include <string>
+
+using namespace std;
+typedef ::string TKey;
+typedef ::string TWord;
+
+//string err;
+const int puncts_num=3, min_dic_len=3, max_dic_len=50000, max_freg = 1000, max_word_len=20, max_sms_len=100000;
+int N=0;
+TWord* puncts;
+map<char, char> keyboard;
+
+
+map<TKey, vector<TWord> > dic;
+map<TWord, int> prefers;
+
+// orders words in list, according to their preferences. 
+// recursive. starts from 'list[n]'.
+// assumes, that preferences can only increment.
+vector<TWord> order(vector<TWord> list, unsigned int n)
+{
+	if (n<list.size()-1)
+	{
+		if (! (prefers[list[n]] < prefers[list[n+1]]))
+		{
+			swap(list[n],list[n+1]);
+			list = order(list, n+1);
+		}
+	}
+	return list;
+}
+
+// prints the word to cout (word='dic[key][pref]')
+int print_word(TKey& key, int& pref)
+{
+	int len = dic[key].size(); //number of words with key 'key'
+	int pos = dic[key].size() - pref; //position of the required word in list='dic[key]'
+	// the vector 'dic[key]' acts here as a circle
+	while(pos < 0 || pos>len)
+	{
+		if (pos<0) pos=pos+len;
+		if (pos>len) pos=pos-len;
+	}
+	TWord output = dic[key].at(pos);
+	cout << output;
+	// puncts ('dic["1"]') shouldn't change preferences
+	if (key!=TKey("1")) 
+	{
+		prefers[dic[key].at(pos)]++;
+		dic[key]=order(dic[key],pos);	
+	}
+	return 0;
+}
+
+// orders words in 'list' according to their preferences.
+// recursive. starts from 'list[n]'.
+// used while first reading from 'cin'
+vector<TWord> global_order(vector<TWord>& list, int n)
+{
+	if (n>0)
+	{
+		if (prefers[list[n]] <= prefers[list[n-1]]) 
+		{
+			swap(list[n],list[n-1]);
+			list = global_order(list, n-1);
+		}
+	}
+	return list;
+}
+
+
+// gets key for the 'word' 
+TKey get_key(TWord word)
+{
+	TKey key = "";
+	int w_len = word.length();
+	
+	for (int i=0; i<w_len; i++)
+	{
+		key = key + keyboard[word[i]];
+	}
+	return key;
+}
+
+// adds puncts to dictionary with key "1"
+int push_puncts()
+{
+	dic["1"].reserve(puncts_num);
+	//if (puncts.length()<puncts_num) {err="invalid puncts";return 1;}
+	for (int i=0; i<puncts_num; i++)
+	{
+		dic["1"].push_back(puncts[i]);
+	}
+	return 0;
+}
+
+// reads and composes dictionary and preferences ('dic', 'prefers') from 'cin'
+int read_dic()
+{
+	cin >> N;
+	//if (N<min_dic_len) {err = "bad N value"; return 1;}
+	
+	TWord wordbuf = ""; //stores current processing word
+	TKey key = "";
+		
+	push_puncts(); // adds 'puncts' to dictionary with key "1"
+	
+	for (int i=0; i<N; i++)
+	{
+		// gets a word
+		cin >> wordbuf;
+		// gets key for the word
+		key = get_key(wordbuf);
+		if (dic[key].size()==0) {dic[key].reserve(1);}
+		// gets the word's frequency and pushes it to dictionary according to it
+		cin >> prefers[wordbuf];
+		dic[key].push_back(wordbuf);
+		dic[key] = global_order(dic[key], dic[key].size()-1);
+	}
+	return 0;
+}
+
+
+int set_keyboard_and_puncts()
+{
+	puncts = new TWord[puncts_num];
+	puncts[0] = '?';
+	puncts[1] = ','; 
+	puncts[2] = '.';
+	keyboard['a'] = '2'; keyboard['b'] = '2'; keyboard['c'] = '2';
+	keyboard['d'] = '3'; keyboard['e'] = '3'; keyboard['f'] = '3';
+	keyboard['g'] = '4'; keyboard['h'] = '4'; keyboard['i'] = '4';
+	keyboard['j'] = '5'; keyboard['k'] = '5'; keyboard['l'] = '5';
+	keyboard['m'] = '6'; keyboard['n'] = '6'; keyboard['o'] = '6';
+	keyboard['p'] = '7'; keyboard['q'] = '7'; keyboard['r'] = '7'; keyboard['s'] = '7';
+	keyboard['w'] = '9'; keyboard['x'] = '9'; keyboard['y'] = '9'; keyboard['z'] = '9';
+	keyboard['t'] = '8'; keyboard['u'] = '8'; keyboard['v'] = '8';
+	return 0;
+}
+
+int main()
+{
+	//if(set_keyboard()) {cout<<err; return 1;}
+	set_keyboard_and_puncts();
+
+	// reads and composes dictionary and preferences ('dic', 'prefers') from 'cin'
+	//if(read_dic()) {cout<<err; return 1;}
+	read_dic();
+
+	TKey key="";
+	int pref=1;
+	char symbol;
+	cin >> symbol;
+
+	while(symbol!='\n')
+	{
+		switch (symbol)
+		{
+		default:
+			key = key + symbol;
+			break;
+		case '*' :
+			pref++;
+			break;
+		case ' ':
+			if (key.length()) {print_word(key,pref); key=""; pref = 1;}
+			cout << ' '; 
+			break;
+		case '1':
+			if (key.length()) {print_word(key,pref); key=""; pref = 1;}
+			key="1";
+			break;
+		}
+	cin.get(symbol);
+	}
+	if (key.length()) print_word(key,pref);
+	return 0;
+}

@@ -1,0 +1,485 @@
+/*
+ * DONE by Vasily Demidenok
+ */
+
+#include <stdlib.h>
+#include <string>
+#include <iostream>
+#include <algorithm>
+#include <map>
+#include <list>
+#include <stdexcept>
+#include <fstream>
+
+#define MIN_DICT_NUM 3
+#define MAX_DICT_NUM 50000
+#define MIN_SUPP 1
+#define MAX_SUPP 1000
+
+using namespace std;
+
+class Word;
+class ListWords;
+
+typedef map<int, ListWords > 		Dict;
+typedef map<int, ListWords >::iterator 	DictIter;
+
+/*
+ * Класс исключения для всех ошибок в программе
+ */
+class MyExcept
+{
+public:
+	string message;
+	MyExcept(string _mess) : message(_mess) {};
+};
+
+/*
+ * Класс который представляет собой слово в словаре с частотой его появления
+ */
+class Word
+{
+private:
+	string	_word;		// Само слово
+	int 	_supp;		// Частота встречаемости слова
+	
+public:
+	Word(string word, int supp)
+	{
+		this->_word = word;
+		this->_supp = supp;
+	}
+	string 	returnName() const	{	return this->_word;	}
+	int 	returnSupp() const	{	return this->_supp;	}
+	void 	increase()			{	this->_supp++;		}
+	virtual ~Word()				{}
+};
+
+template< typename T > class AbstractItem
+{
+	public:
+		AbstractItem(T *s) { self = s; prev = NULL; next = NULL; }
+		~AbstractItem()	{delete self;}
+
+		AbstractItem 	*prev;
+		T 				*self;
+		AbstractItem 	*next;
+	private:
+		AbstractItem(const AbstractItem & );
+		//AbstractItem operator=();
+};
+
+class ListWords
+{
+	private:
+		AbstractItem<Word> *_begin;
+		AbstractItem<Word> *_end;
+		unsigned int _length;
+
+	public:
+
+	ListWords(){ _begin = NULL; _end = NULL; _length = NULL; }
+	ListWords(Word *_some) 
+	{ 
+		AbstractItem<Word> *some = new AbstractItem<Word>(_some);
+		_begin = some; 	_end = some;
+		some->prev = NULL; 
+		some->next = NULL;
+	}
+	const Word* operator[] (unsigned int step) 
+	{
+		AbstractItem<Word> *start = _begin;
+		
+		while (( start != NULL ) && (step-- > 0))
+			start = start->next;
+		
+		if (start != NULL) return start->self;
+		else return NULL;	
+	}
+
+	const Word* increase(unsigned int step)
+	{
+		AbstractItem<Word> *start = _begin;
+		
+		while (( start != NULL ) && (step-- > 0))
+			start = start->next;
+
+		if (start != NULL)
+		{
+			start->self->increase();
+			// Если и так уже на первом месте
+			if (start->prev == NULL)
+				return start->self;
+
+			AbstractItem<Word> *temp = start->prev;
+			// Движемся влево, по скольку последовательность отсортировано по убыванию
+			while ((temp != NULL) && (temp->self->returnSupp() <= start->self->returnSupp()))
+				temp = temp->prev;
+			// если temp == NULL То мы достигли края
+			if ((temp != NULL) && (temp->next == start))
+				return start->self;
+			// Разбираемся с правой частью
+			if (start->next == NULL)
+			{
+				// Разбираемся с тем, кто на нас ссылался
+				start->prev->next = NULL;
+				_end = start->prev;
+			}
+			else
+			{
+				start->prev->next = start->next;
+				start->next->prev = start->prev;
+			};
+			// если temp не равен нулю, то мы нашли элемент который больше текущего
+			if (temp == NULL)
+			{
+				// Левая часть
+				_begin->prev = start;
+				start->next = _begin;
+				_begin = start;
+				start->prev = NULL;
+			}
+			else	// Иначе, просто встановимся перед ним.
+			{
+				// Левая части
+				temp->next->prev = start;
+				start->prev = temp;
+				start->next = temp->next;
+				temp->next = start;
+			};
+			
+			return start->self;
+		}
+		return NULL;
+	}
+	
+	void push_front(Word *_some)
+	{
+		AbstractItem<Word> *some = new AbstractItem<Word>(_some);
+		if (_begin == NULL) 
+		{
+			_begin 	= some;
+			_end	= some;	
+		}
+		else
+		{
+			_begin->prev = some;
+			some->next 	= _begin;
+			some->prev 	= NULL;
+			_begin 		= some;
+		}
+
+		_length++;
+	}
+
+	void push_back(Word *_some) 
+	{ 
+		AbstractItem<Word> *some = new AbstractItem<Word>(_some);
+		if (_end == NULL)
+		{
+			_begin 	= some;
+			_end	= some;
+		}
+		else
+		{
+			_end->next = some;
+			some->next 	= NULL;
+			some->prev 	= _end;
+			_end 		= some;
+		}
+
+		_length++;
+	}
+	unsigned int size() { return _length; }
+	void sort(bool (*funct)(const Word *first, const Word *second)) 
+	{
+		for (AbstractItem<Word> *some = _begin; some != NULL; some=some->next)
+		{
+			for (AbstractItem<Word> *mome = some->next; mome != NULL; mome=mome->next)
+			{
+				// Если элемент стоящий правее больше, то меняем местами
+				if (funct(mome->self, some->self))
+				{
+					changePlaces(mome, some);
+				}
+			}
+		}
+	}
+private:
+		
+	void changePlaces(AbstractItem<Word> *first, AbstractItem<Word> *second)
+	{
+		if (first == second) return;
+		Word *temp = first->self;
+		first->self = second->self;
+		second->self = temp;
+	}
+
+};
+
+/*
+ Класс необходимый для подбора необходимого слова по числовому коду и количеству нажатий звёздочки. Так же
+ он изменяет значение частоты слова после его использования, изменяя последовательность в словаре.
+ */
+class FunctorWords
+{
+private:
+	Dict &_dict;
+	
+public:
+	FunctorWords(Dict &dict): _dict(dict) {};
+	
+	virtual string operator()(int slovo, int perexod)
+	{
+		Dict::iterator om = _dict.find(slovo);
+		if (om == _dict.end()) 
+			throw MyExcept ("Error: Word dictionary with a word code is missing");
+		ListWords &words = om->second;
+			
+		// Находим позицию нужного нам элемента
+		int step = perexod % words.size();
+		const Word *word = words.increase(step);
+		if (word == NULL)
+			throw MyExcept("Error: Illegal index");
+			
+		return word->returnName();
+
+	};
+	virtual ~FunctorWords()	{};
+};
+/*
+ Класс который отвечает за вывод знака препинания. 
+ */
+class FunctorPunctuat
+{
+private:
+	Dict &_dict;
+	
+public:
+	FunctorPunctuat(Dict &dict): _dict(dict) {};
+	
+	virtual string operator()(int slovo, int perexod)
+	{
+		Dict::iterator om = _dict.find(slovo);
+		if (om == _dict.end()) 
+			throw MyExcept ("Error: Word dictionary with a word code is missing");
+		ListWords &words = om->second;
+			
+		// Находим позицию нужного нам элемента
+		int step = perexod % words.size();
+
+		const Word *itD = words[step];
+		if (itD == NULL) 
+			throw("Error: Illegal index");
+
+		return itD->returnName();
+	};
+	virtual ~FunctorPunctuat() {};
+	
+};
+
+/////////////////////////////// Основные фунции
+
+int formComputedWord(map<int, string> &dict, string line)
+{
+	// Функция вычисляет по слову его цифровой код.
+	
+	int computedWord = 0;
+	
+	for (string::iterator it = line.begin(); it != line.end(); it++)
+	{
+		// Пробегаем по всем клавишам
+		for (map<int, string>::iterator itD = dict.begin(); itD != dict.end(); itD++)
+		{
+			string &tempStr = itD->second;
+			if  (string::npos != tempStr.find(*it, 0))
+			{
+				computedWord = computedWord * 10 + itD->first;
+				break;
+			}
+		}
+	}
+	
+	return computedWord;
+}
+
+Word* formWord(string &line)
+{
+	/*
+	 * Вытаскивает из строки слово и его частоту и возвращаем класс слова в словаре.
+	 */
+	
+	size_t probel = line.find_last_of(' ');
+	
+	if (probel != string::npos)
+	{
+		string name = line.substr(0, probel);
+		int supp 	= atoi(line.substr(probel).c_str());
+		if ((supp < MIN_SUPP) || (supp > MAX_SUPP ))
+			throw MyExcept("Error: Invalid supp num");
+		
+		return new Word(name, supp);
+	}
+	
+	return NULL;
+}
+
+bool compareWords(const Word *first, const Word *second)
+{
+	/*
+	 * Функция для сравнения Words. 
+	 * Возвращает истину если первый больше
+	 */
+	if (first->returnSupp() == second->returnSupp())
+		return (first->returnName() < second->returnName());
+	else
+		return (first->returnSupp() > second->returnSupp());
+}
+
+void parseLine(string &line, FunctorWords &functWord, FunctorPunctuat &functPunct)
+{
+	/*
+	 * Функция парсит строку и выводит на экран разобранное сообщение. Звездочка означает что выбирает следующее слово
+	 * или следующий знак препинания, 
+	 * 1 - знак пунктуации, остальные цифры - код слова, пробелы ничего не обозначают.
+	 */
+	
+	bool bWord = false, bPunct = false;
+	int perexod = 0, compWord = 0;
+	
+	for (string::iterator it = line.begin(); it != line.end(); it++)
+	{
+		if ((*it == ' ') || (*it == '1'))
+		{
+			// Записываем предыдущее слово или знак если есть + пробел
+			if (bWord)
+			{
+				cout << functWord(compWord, perexod);
+				perexod = 0; compWord = 0; bWord = false;
+			}
+			else if (bPunct)
+			{
+				cout << functPunct(1, perexod);
+				perexod = 0; bPunct = false;
+			};
+			
+			if (*it == ' ')
+				cout << *it;
+			else
+				bPunct = true;
+		}
+		// увеличиваем переход
+		else if (*it == '*')
+		{
+			if (bWord || bPunct) perexod++;
+			else throw MyExcept("Error: Asterisk found but there is no Punct or Word");
+		}
+		else if (isdigit(*it))
+		{
+			if (bPunct)
+			{
+				cout << functPunct(1, perexod);
+				perexod = 0; bPunct = false;
+			};
+			
+			if (bWord)
+				compWord = compWord * 10 + atoi( string(1, *it).c_str() );
+			else
+			{
+				bWord = true;
+				compWord = atoi( string(1, *it).c_str() );
+			}
+		}
+		else
+			throw MyExcept("Error: Illegal simbol in the line.");
+	}
+	if (bWord)
+		cout << functWord(compWord, perexod);
+	else if (bPunct)
+		cout << functPunct(1, perexod);
+}
+
+int main()
+{
+	int wordsAmount = 0, wordsCount = 0;
+	Dict dictionary;
+	string line;
+
+	map<int, string> dict;
+	dict[2] = "abc";
+	dict[3] = "def";
+	dict[4] = "ghi";
+	dict[5] = "jkl";
+	dict[6] = "mno";
+	dict[7] = "pqrs";
+	dict[8] = "tuv";
+	dict[9] = "wxyz";
+
+	try
+	{
+
+		while(cin)
+		{
+			getline(cin, line);
+			
+			// Получаем количество слов в словаре.
+			if (wordsAmount == 0)
+			{
+				wordsAmount = atoi(line.c_str());
+				if ((wordsAmount < MIN_DICT_NUM) || (wordsAmount > MAX_DICT_NUM))
+					throw MyExcept("Error: Invalid value of number of words");
+
+				continue;
+			}
+			else
+			{
+				if (wordsCount < wordsAmount)
+				{
+					// Формируем слово и записываем в соотвествующий словарь
+					Word *newWord = formWord(line);
+					if (newWord == NULL)
+						throw MyExcept("Error: Failed to parse a word");
+					
+					// Вычисляем цифровой код слова.
+					int computedWord = formComputedWord(dict, newWord->returnName());
+					
+					// Если словарь отсутствует, то создаём его и добавляем.
+					DictIter it = dictionary.find(computedWord);
+					if (it == dictionary.end())
+						dictionary[computedWord] = ListWords(newWord);
+					else
+						it->second.push_back(newWord);
+					
+					wordsCount++;
+				}
+				else
+				{
+					// Сперва надо упорядочить слова в каждом из подсловарей Words (по частоте и по имени) по убыванию
+					for (DictIter sm = dictionary.begin(); sm != dictionary.end(); sm++)
+						sm->second.sort(compareWords);
+					
+					// Заполняем данные по знакам препинания
+					ListWords words;
+					words.push_back(new Word(".", 1));
+					words.push_back(new Word(",", 1));
+					words.push_back(new Word("?", 1));
+					dictionary[1] = words;
+
+					// Парсим последнюю строчку файла и выводим в stdout.
+					FunctorWords 	*fuW	= new FunctorWords(dictionary);
+					FunctorPunctuat *fuP 	= new FunctorPunctuat(dictionary);
+					
+					parseLine(line,	*fuW, *fuP);
+				}
+			}
+		}
+	}
+	catch (MyExcept except)
+	{
+		std::cerr << except.message;
+		return EXIT_FAILURE;
+	}
+	return EXIT_SUCCESS;
+}
+
+
