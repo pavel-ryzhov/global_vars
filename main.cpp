@@ -24,7 +24,7 @@ public:
 
     void run(const clang::ast_matchers::MatchFinder::MatchResult &result) override {
         const auto *var_decl = result.Nodes.getNodeAs<clang::VarDecl>("globalVar");
-        if (!var_decl || !var_decl->isFileVarDecl())
+        if (!var_decl || !var_decl->isFileVarDecl() || !llvm::isa<clang::TranslationUnitDecl>(var_decl->getDeclContext()))
             return;
         const auto &source_manager = *result.SourceManager;
         const clang::SourceLocation loc = var_decl->getLocation();
@@ -47,7 +47,7 @@ int main(int argc, const char **argv) {
     auto &options_parser = expected_parser.get();
     auto &compilations = options_parser.getCompilations();
     const auto &source_paths = options_parser.getSourcePathList();
-    std::ofstream ofs{"output_1.txt"};
+    std::ofstream ofs{"output_3.txt"};
 
     clang::tooling::ClangTool tool(compilations, source_paths);
 
@@ -55,7 +55,9 @@ int main(int argc, const char **argv) {
 
     clang::ast_matchers::DeclarationMatcher global_var_matcher = clang::ast_matchers::varDecl(
         clang::ast_matchers::hasGlobalStorage(),
-        clang::ast_matchers::unless(clang::ast_matchers::parmVarDecl())
+        clang::ast_matchers::unless(clang::ast_matchers::parmVarDecl()),
+        clang::ast_matchers::unless(clang::ast_matchers::isStaticLocal()),
+        clang::ast_matchers::unless(clang::ast_matchers::hasType(clang::ast_matchers::isConstQualified()))
     ).bind("globalVar");
 
     clang::ast_matchers::MatchFinder finder;
